@@ -40,6 +40,9 @@ ANNEX_SUFFIX = " (annex)"
 # digikam.exe, which may run during moves).
 APPS_MODIFYING_FILES = {"darktable.exe", "ansel.exe", "Lightroom.exe", "emdb.exe"}
 
+# Lightroom catalogs, read (never written) before folders are moved to or from the annex.
+LIGHTROOM_CATALOGS = [Path(r"C:\Users\senso\Large\Pictures\Lightroom\Lightroom Catalog.lrcat")]
+
 # Camera clock correction: the other cameras' photos are put in order relative
 # to this camera (model, as exiftool reports it). Its own photos are never changed.
 MASTER_CAMERA = "ILCE-9M2"

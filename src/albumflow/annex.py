@@ -213,9 +213,6 @@ def check_space(src: Path, dest_drive: Path) -> None:
 
 # --- moving ---
 
-LIGHTROOM_HINT = "If Lightroom knows this folder: Library > Folders > right-click it > Find Missing Folder."
-
-
 def to_annex(folder: Path, log=print, progress: Progress | None = None, dry_run: bool = False) -> Path:
     """Move folder (inside the home folder) to the annex; returns the annex copy."""
     folder = Path(os.path.abspath(folder))
@@ -256,7 +253,6 @@ def to_annex(folder: Path, log=print, progress: Progress | None = None, dry_run:
         create_link(link, target)
     (target / MOVE_NOTE).unlink(missing_ok=True)
     log(f"Done: {folder.name} is in the annex; {link.name} stands for it.")
-    log(LIGHTROOM_HINT)
     return target
 
 
@@ -294,7 +290,6 @@ def from_annex(folder: Path, log=print, progress: Progress | None = None, dry_ru
         delete_tree(source, annex)
     (folder / MOVE_NOTE).unlink(missing_ok=True)
     log(f"Done: {folder.name} is back at {folder.parent}.")
-    log(LIGHTROOM_HINT)
     return folder
 
 

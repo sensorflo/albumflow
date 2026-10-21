@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import album_choice, annex, backup, card_import, clock, config, gphotos_api, gphotos_sync
+from albumflow import album_choice, annex, backup, card_import, clock, config, gphotos_api, gphotos_sync, lightroom
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -574,17 +574,41 @@ def _annex_bar(display: ProgressDisplay, direction: str):
     return display.bar(label)
 
 
+def check_lightroom(paths: list[Path]) -> lightroom.Report:
+    """Refuse (naming the folders) if moving would leave work only in the Lightroom catalog."""
+    annex.check_no_editors()  # Lightroom closed, so its catalog is consistent
+    report = lightroom.check(paths)
+    lightroom.refuse_if_unsafe(report, annex.home())
+    return report
+
+
+def lightroom_hint(report: lightroom.Report, log) -> None:
+    if report.photos:
+        log(f"Lightroom has {report.photos} photos of this folder; reconnect it there: "
+            "Library > Folders > right-click it > Find Missing Folder.")
+
+
 def cmd_to_annex(args) -> int:
     display = ProgressDisplay()
-    annex.to_annex(to_annex_folder(args.target), log=display.log, progress=_annex_bar(display, "to annex"),
-                   dry_run=args.dry_run)
+    folder = to_annex_folder(args.target)
+    report = check_lightroom([folder])
+    annex.to_annex(folder, log=display.log, progress=_annex_bar(display, "to annex"), dry_run=args.dry_run)
+    if not args.dry_run:
+        lightroom_hint(report, display.log)
     return 0
 
 
 def cmd_from_annex(args) -> int:
     display = ProgressDisplay()
-    annex.from_annex(from_annex_folder(args.target), log=display.log,
-                     progress=_annex_bar(display, "from annex"), dry_run=args.dry_run)
+    folder = from_annex_folder(args.target)
+    paths = [folder, annex.link_of(folder)]  # Lightroom may know it under either, or in the annex
+    drive = annex.find_annex()
+    if drive:
+        paths.append(drive / annex.relative(folder))
+    report = check_lightroom(paths)
+    annex.from_annex(folder, log=display.log, progress=_annex_bar(display, "from annex"), dry_run=args.dry_run)
+    if not args.dry_run:
+        lightroom_hint(report, display.log)
     return 0
 
 
