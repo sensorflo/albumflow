@@ -1,0 +1,8 @@
+# Credentials and tokens never belong in the repo; they live in %APPDATA%\albumflow.
+*client_secret*.json
+*token*.json
+
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/

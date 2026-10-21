@@ -1,0 +1,2 @@
+# Unix line endings everywhere, regardless of the local git config.
+* text=auto eol=lf
