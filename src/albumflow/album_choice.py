@@ -2,7 +2,7 @@
 
 Candidates are the existing <new>\\<topic>\\<album> folders. Matching ignores
 case and treats spaces, "-" and "_" alike. A query whose words all appear in a
-name ranks highest; otherwise difflib similarity catches typos. Ties go to the
+name ranks highest; otherwise nearly matching words catch typos. Ties go to the
 most recently modified album (folder time: last photo added or removed).
 """
 
@@ -16,7 +16,8 @@ from pathlib import Path
 
 from albumflow import config
 
-MIN_SIMILARITY = 0.4
+MIN_SIMILARITY = 0.4  # share of query words that must (nearly) match
+WORD_SIMILARITY = 0.8
 
 
 @dataclass(frozen=True)
@@ -56,11 +57,20 @@ def albums(root: Path | None = None) -> list[Album]:
 
 
 def score(query: str, text: str) -> float:
-    """2: every query word appears in text (then recency decides); else difflib similarity in [0, 1]."""
+    """2: every query word appears in text (then recency decides).
+
+    Otherwise the share of query words that nearly match a word of text
+    (difflib ratio >= WORD_SIMILARITY, which catches typos). Numbers such as
+    years only count if the query has nothing else: most albums share a year.
+    """
     q, t = normalize(query), normalize(text)
     if all(word in t for word in q.split()):
         return 2.0
-    return difflib.SequenceMatcher(None, q, t).ratio()
+    words = [w for w in q.split() if not w.isdigit()] or q.split()
+    targets = t.split()
+    matched = sum(1 for w in words
+                  if any(difflib.SequenceMatcher(None, w, x).ratio() >= WORD_SIMILARITY for x in targets))
+    return matched / len(words)
 
 
 def exact(query: str, candidates: list[Album]) -> list[Album]:
@@ -70,13 +80,18 @@ def exact(query: str, candidates: list[Album]) -> list[Album]:
 
 
 def rank(query: str, candidates: list[Album], limit: int = 5) -> list[Album]:
-    """Best matches first; an empty query lists the most recently modified albums."""
+    """Best matches first; an empty query lists the most recently modified albums.
+
+    With a topic that exists, only that topic's albums are compared, by name;
+    comparing "topic name" would make every album of the topic look similar.
+    """
     topic, name = split_query(query)
+    in_topic = [a for a in candidates if topic is not None and normalize(a.topic) == normalize(topic)]
     scored = []
-    for a in candidates:
-        if topic is None:
+    for a in in_topic or candidates:
+        if topic is None or in_topic:
             s = score(name, a.name)
-        else:
+        else:  # no such topic, e.g. a typo in it: compare topic and name
             s = score(f"{topic} {name}", f"{a.topic} {a.name}")
         if s >= MIN_SIMILARITY:
             scored.append((s, a.mtime, a))

@@ -124,3 +124,22 @@ def test_no_arguments_shows_help(capsys):
     from albumflow import cli
     assert cli.main([]) == 0
     assert capsys.readouterr().out.startswith("usage: albumflow")
+
+
+def test_topic_given_compares_only_names_within_it(new):
+    # "party/zz-unknown 2026" must not match every party album just because of "party"
+    assert names(album_choice.rank("party/zz-unknown 2026", album_choice.albums())) == []
+    assert names(album_choice.rank("party/castle", album_choice.albums())) == [
+        "party/Secret Castle 2026", "party/castle-of-dreams-2025"]
+    assert names(album_choice.rank("hollidays/castle", album_choice.albums())) == []
+
+
+def test_typo_in_topic_still_finds_the_album(new):
+    assert names(album_choice.rank("prty/secret castle", album_choice.albums()))[0] == "party/Secret Castle 2026"
+
+
+def test_create_new_album_in_topic_asks_nothing(new):
+    def ask(prompt):
+        raise AssertionError("should not ask")
+    assert choose_album("hollidays/Madeira 2026", create=True, ask=ask, out=lambda *_: None) == \
+        ("hollidays", "Madeira 2026")
