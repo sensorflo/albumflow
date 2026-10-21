@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import datetime
+import re
 import shutil
 import sys
 import threading
@@ -12,7 +13,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import album_choice, backup, card_import, config, gphotos_api, gphotos_sync
+from albumflow import album_choice, backup, card_import, clock, config, gphotos_api, gphotos_sync
+from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
 
@@ -47,8 +49,8 @@ def drive_description(drive: Path) -> str:
 
 
 class _Bar:
-    def __init__(self, label: str | Callable[[], str], last: bool):
-        self.describe, self.last = label, last
+    def __init__(self, label: str | Callable[[], str], last: bool, unit: str = "bytes"):
+        self.describe, self.last, self.unit = label, last, unit
         self.label = label if isinstance(label, str) else ""
         self.done, self.total, self.reported = 0, 0, False
         self.start = time.monotonic()
@@ -66,9 +68,12 @@ class _Bar:
         eta = int((self.total - self.done) / rate) if rate > 0 else 0
         width = max(10, min(30, columns - label_width - 45))
         filled = int(frac * width)
+        if self.unit == "bytes":
+            amount = f"{self.done / 1e9:.1f}/{self.total / 1e9:.1f} GB  {rate / 1e6:.0f} MB/s"
+        else:
+            amount = f"{self.done}/{self.total} {self.unit}  {rate:.0f}/s"
         text = (f"{self.label:<{label_width}}  [{'#' * filled}{'-' * (width - filled)}] {frac:4.0%}  "
-                f"{self.done / 1e9:.1f}/{self.total / 1e9:.1f} GB  {rate / 1e6:.0f} MB/s  "
-                f"{eta // 60}:{eta % 60:02d} left")
+                f"{amount}  {eta // 60}:{eta % 60:02d} left")
         return text[:columns]
 
 
@@ -88,13 +93,13 @@ class ProgressDisplay:
         self.paused = False  # while asking a question: no redraws
         _enable_ansi()
 
-    def bar(self, label: str | Callable[[], str], last: bool = False):
+    def bar(self, label: str | Callable[[], str], last: bool = False, unit: str = "bytes"):
         """A progress callback for a new bar, shown once it reports.
 
         label may be a function, re-evaluated on each redraw (e.g. free space).
         Bars appear in creation order, those with last=True below all others.
         """
-        bar = _Bar(label, last)
+        bar = _Bar(label, last, unit)
         bar.refresh_label()
         with self.lock:
             self.bars.append(bar)
@@ -115,17 +120,29 @@ class ProgressDisplay:
             if not self.paused:
                 self._redraw()
 
-    def ask(self, prompt: str) -> str:
-        """Ask a question below the messages; the bars keep their state but aren't redrawn meanwhile."""
+    def ask(self, prompt: str, prefill: str = "", complete=None) -> str:
+        """Ask a question below the messages; the bars keep their state but aren't redrawn meanwhile.
+
+        prefill is typed in for the user, who can edit it (Backspace, Esc clears).
+        Where that isn't possible (no real console, e.g. Git Bash's mintty), the
+        prefill is shown in brackets and complete(prefill, typed) builds the
+        answer; by default, Enter takes the prefill.
+        """
         with self.lock:
             self._erase()
             self.paused = True
-            sys.stderr.write(prompt)
-            sys.stderr.flush()
         try:
-            return input()
-        except EOFError:
-            return ""
+            if prefill and _console_keys():
+                return _edit_line(prompt, prefill)
+            sys.stderr.write(f"{prompt}[{prefill}] " if prefill else prompt)
+            sys.stderr.flush()
+            try:
+                typed = input()
+            except EOFError:
+                typed = ""
+            if not prefill:
+                return typed
+            return complete(prefill, typed) if complete else (typed or prefill)
         finally:
             with self.lock:
                 self.paused = False
@@ -147,6 +164,43 @@ class ProgressDisplay:
             sys.stderr.write(bar.line(columns, label_width) + "\n")
         self.drawn = len(shown)
         self.last = time.monotonic()
+        sys.stderr.flush()
+
+
+def _console_keys() -> bool:
+    """Whether single key presses can be read: a real Windows console, not a pipe or mintty."""
+    try:
+        import msvcrt  # noqa: F401
+    except ImportError:
+        return False
+    return sys.stdin.isatty()
+
+
+def _edit_line(prompt: str, text: str) -> str:
+    """Read a line with text already typed in. Backspace deletes, Esc clears, Enter accepts."""
+    import msvcrt
+    buf = list(text)
+    sys.stderr.write(prompt + text)
+    sys.stderr.flush()
+    while True:
+        ch = msvcrt.getwch()
+        if ch in ("\r", "\n"):
+            sys.stderr.write("\n")
+            return "".join(buf)
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        if ch in ("\x00", "\xe0"):  # arrow and function keys: ignored
+            msvcrt.getwch()
+        elif ch == "\x08":
+            if buf:
+                buf.pop()
+                sys.stderr.write("\b \b")
+        elif ch == "\x1b":
+            sys.stderr.write("\b \b" * len(buf))
+            buf.clear()
+        elif ch.isprintable():
+            buf.append(ch)
+            sys.stderr.write(ch)
         sys.stderr.flush()
 
 
@@ -316,6 +370,120 @@ def choose_album(query: str, create: bool, ask=None, out=print) -> tuple[str, st
     raise AlbumflowError("No album chosen")
 
 
+def find_photo(album_dir: Path, query: str) -> Path:
+    """The photo whose name contains query (case-insensitive); its RAW if there is one."""
+    matches = [p for p in clock.photo_files(album_dir) if query.lower() in p.name.lower()]
+    stems = {Path(clock.split_name(p.name)[1]).stem for p in matches}
+    if not matches:
+        raise AlbumflowError(f"No photo matching {query!r} in {album_dir}")
+    if len(stems) > 1:
+        shown = "\n  ".join(sorted(stems)[:10])
+        raise AlbumflowError(f"{len(stems)} photos match {query!r}; be more specific:\n  {shown}")
+    return sorted(matches, key=lambda p: p.suffix.lower() != ".arw")[0]
+
+
+def _one_file_per_photo(album_dir: Path) -> list[Path]:
+    """The album's photos in name order, one file each (the RAW if there are several)."""
+    chosen: dict[str, Path] = {}
+    for path in clock.photo_files(album_dir):
+        if path.stem not in chosen or path.suffix.lower() == ".arw":
+            chosen[path.stem] = path
+    return sorted(chosen.values(), key=lambda p: p.name)
+
+
+def parse_clock_time(text: str) -> datetime.time:
+    """'09:28:54', '09 28 54', '9.28.54', '09:28' or '092854': any separator between the parts."""
+    parts = re.findall(r"\d+", text)
+    if len(parts) == 1 and len(parts[0]) in (4, 6):
+        parts = re.findall(r"\d\d", parts[0])
+    try:
+        if len(parts) in (2, 3) and all(len(p) <= 2 for p in parts):
+            return datetime.time(*(int(p) for p in parts))
+    except ValueError:
+        pass
+    raise AlbumflowError(f"Not a time: {text!r} (expected hours, minutes and seconds, e.g. 09 28 54)")
+
+
+def _complete_time(hour: str, typed: str) -> str:
+    """Without an editable prefill: typed is the whole time, or just minutes and seconds."""
+    return typed if len(re.findall(r"\d+", typed)) >= 3 else f"{hour} {typed}"
+
+
+
+def record_reading(album_dir: Path, photo: Path, clock_time: datetime.time, exif: ExifTool, log=print) -> None:
+    camera, _ = clock.measure(album_dir, photo, clock_time, exif)
+    log(f"  {clock.camera_label(camera)}: {clock.offset_text(clock.AlbumState(album_dir), camera)}")
+
+
+def cmd_sync_clocks(args) -> int:
+    album_dir = config.album_dir(args.topic, args.album)
+    display = ProgressDisplay()
+    log = display.log
+    readings = []
+    for reading in args.reading or []:
+        photo, sep, text = reading.rpartition("=")
+        if not sep or not photo:
+            raise AlbumflowError(f"Expected PHOTO=TIME, got {reading!r}")
+        readings.append((find_photo(album_dir, photo), parse_clock_time(text)))
+
+    with ExifTool() as exif:
+        for photo, clock_time in readings:
+            record_reading(album_dir, photo, clock_time, exif, log)
+        if not args.reading and not args.assume_in_sync:  # ask for clock readings
+            files = _one_file_per_photo(album_dir)
+            default = files[0].name if files else ""
+            log("Clock readings: photo of the clock, then the time it shows.")
+            while True:
+                suggestion = f" [{default}]" if default else ""
+                typed = display.ask(f"Clock photo{suggestion} (- to finish): ").strip()
+                query = typed or default
+                if typed == "-" or not query:
+                    break
+                try:
+                    photo = find_photo(album_dir, query)
+                    log(f"  {photo.name}")
+                    hour = photo.name[9:11]  # the camera's hour; the clock rarely differs
+                    clock_time = parse_clock_time(display.ask("Time on the clock: ", f"{hour} ", _complete_time))
+                except AlbumflowError as e:
+                    log(f"  {e}")
+                    continue
+                record_reading(album_dir, photo, clock_time, exif, log)
+                later = [f for f in files if f.name > photo.name and f.stem != photo.stem]
+                default = later[0].name if later else ""
+
+        state = clock.AlbumState(album_dir)
+        shots = clock.load_shots(album_dir, state, exif, log, progress=display.bar("cameras", unit="photos"))
+    for wanted in args.assume_in_sync or []:
+        matching = sorted({s.camera for s in shots if clock.model(s.camera).lower() == wanted.lower()})
+        if not matching:
+            raise AlbumflowError(f"No photos of a camera {wanted!r} in this album")
+        state.assumed = sorted(set(state.assumed) | set(matching))
+        state.save()
+
+    counts: dict[str, int] = {}
+    for s in shots:
+        counts[clock.model(s.camera)] = counts.get(clock.model(s.camera), 0) + 1
+    log("Cameras in this album: " + ", ".join(f"{m} ({n} photos)" for m, n in sorted(counts.items())))
+    if state.clock or state.assumed:
+        log("Clock readings (+: the camera's clock is ahead):")
+        for line in clock.describe(state):
+            log(line)
+    else:
+        log("No clock readings for this album yet.")
+        return 0
+
+    drive = backup.find_backup_drive(_path(args.drive))
+    if drive is None:
+        log("The backup drive is not connected: photos are only corrected once their originals are on it.")
+    dest = backup.backup_dir(drive, args.album) if drive else None
+
+    def confirm(question: str) -> bool:
+        return display.ask(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes")
+
+    clock.apply(album_dir, dest, log=log, confirm=confirm, dry_run=args.dry_run)
+    return 0
+
+
 def cmd_backup(args) -> int:
     display = ProgressDisplay()
     drive = _path(args.drive)
@@ -362,6 +530,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("backup-raw", aliases=["br"], help="copy an album's raw originals to the backup drive")
     album_args(p, drive=True)
     p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("sync-clocks", aliases=["sc"],
+                       help="record clock readings; correct photos so all cameras' photos are in order")
+    album_args(p)
+    p.add_argument("-r", "--reading", action="append", metavar="PHOTO=TIME",
+                   help="a clock photo (part of its name is enough) and the time the clock in it shows, "
+                        "e.g. _DSC7115=09:28:54; repeat for each camera. Without any: asked for")
+    p.add_argument("--drive", help=f"backup drive (default: the one with a {config.BACKUP_MARKER} file)")
+    p.add_argument("--assume-in-sync", action="append", metavar="MODEL",
+                   help="a camera that took no clock photo, treated as in sync with the master, e.g. ILCE-7M3")
+    p.set_defaults(func=cmd_sync_clocks)
 
     p = sub.add_parser("gphotos-login", help="log in to Google Photos (opens the browser)")
     p.set_defaults(func=cmd_gphotos_login)

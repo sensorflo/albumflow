@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Callable
 
 from albumflow import config
+from albumflow import clock
+from albumflow.clock import split_name
 from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
 
 
@@ -50,6 +52,13 @@ def missing_on_backup(source_dir: Path, dest_dir: Path) -> list[tuple[Path, Path
     for src in sorted(source_dir.iterdir()):
         if not (src.is_file() and src.suffix.lower() in config.CAMERA_SUFFIXES):
             continue  # also skips ".part" files of copies in progress
+        corrected, import_name = split_name(src.name)
+        if corrected:
+            # Clock-corrected on the PC; the backup keeps the original under its import name.
+            if not (dest_dir / import_name).is_file():
+                raise AlbumflowError(f"{src.name} was clock-corrected, but its original {import_name} "
+                                     f"is not on the backup drive")
+            continue
         dest = dest_dir / src.name
         if not dest.exists():
             todo.append((src, dest))
@@ -85,6 +94,8 @@ def backup_raw(topic: str, album: str, drive: Path | None = None, dry_run: bool 
         counter.start(src.name)
         copy_file(src, dest, counter.add)
     log("Backup done.")
+    if clock.has_measurements(source_dir):  # the originals are on the backup now
+        clock.apply(source_dir, dest_dir, log=log)
     if remove_drive:
         remove_backup_drive(dest_dir, log)
 

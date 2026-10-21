@@ -62,3 +62,39 @@ class ExifTool:
         entries = json.loads(out) if out.strip() else []
         value = entries[0].get("DateTimeOriginal", "") if entries else ""
         return value if len(value) == 15 else ""
+
+    def capture_info(self, path: Path) -> tuple[str, str]:
+        """(capture time as in capture_time(), camera as in camera()) in one query.
+
+        Uses -fast instead of -fast2: Sony's serial number is in the maker notes.
+        That costs about 6 ms per photo.
+        """
+        out = self._run("-j", "-fast", "-charset", "filename=utf8", "-DateTimeOriginal", "-d", "%Y%m%dT%H%M%S",
+                        "-Model", "-InternalSerialNumber", "-SerialNumber", str(path))
+        entries = json.loads(out) if out.strip() else []
+        tags = entries[0] if entries else {}
+        value = tags.get("DateTimeOriginal", "")
+        serial = tags.get("InternalSerialNumber") or tags.get("SerialNumber") or ""
+        return (value if len(value) == 15 else ""), f"{tags.get('Model', 'unknown')} {serial}".strip()
+
+    def camera(self, path: Path) -> str:
+        """'<model> <serial>', e.g. 'ILCE-9M2 c9fe0000e407'; serial may be missing."""
+        return self.capture_info(path)[1]
+
+    def shift_times(self, path: Path, seconds: int) -> None:
+        """Shift the capture time tags in a photo (or XMP sidecar) by whole seconds, in place."""
+        if not seconds:
+            return
+        sign = "+" if seconds > 0 else "-"
+        days, rest = divmod(abs(seconds), 86400)
+        hours, rest = divmod(rest, 3600)
+        minutes, secs = divmod(rest, 60)
+        shift = f"{sign}=0:0:{days} {hours}:{minutes}:{secs}"
+        if path.suffix.lower() == ".xmp":
+            tags = ["-XMP-exif:DateTimeOriginal", "-XMP-xmp:CreateDate", "-XMP-photoshop:DateCreated"]
+        else:
+            tags = ["-AllDates"]
+        out = self._run("-overwrite_original", "-charset", "filename=utf8",
+                        *[tag + shift for tag in tags], str(path))
+        if "error" in out.lower() and "0 image files updated" not in out:
+            raise AlbumflowError(f"exiftool could not shift the time in {path}: {out.strip()}")

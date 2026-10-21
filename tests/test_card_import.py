@@ -10,7 +10,7 @@ from albumflow.files import AlbumflowError
 
 
 def photos(folder):
-    """The folder's files, without hidden ones."""
+    """The folder's files, without albumflow's own state file."""
     return [p for p in folder.iterdir() if not p.name.startswith(".")]
 
 

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from albumflow import backup, config
+from albumflow import backup, clock, config
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, ByteCounter, Progress, drives, eject, same_content, volume_serial
 
@@ -172,28 +172,39 @@ def import_card(card: Path, topic: str, album: str, create_album: bool = False, 
         on_card(total)
     counter = ByteCounter(total, progress)
     items, skipped = [], 0
+    state = clock.AlbumState(album_dir)  # records each photo's camera, for the clock sync
     with ExifTool() as exif:
-        for src in sources:
-            size = src.stat().st_size
-            counter.start(src.name)
-            item, was_there = import_photo(src, album_dir, card_backup_dir, exif)
-            counter.add(size)
-            items.append(item)
-            skipped += was_there
-            if on_photo:
-                on_photo(size)
+        try:
+            for i, src in enumerate(sources, 1):
+                size = src.stat().st_size
+                counter.start(src.name)
+                item, was_there, camera = import_photo(src, album_dir, card_backup_dir, exif)
+                state.cameras[Path(item.pc.name).stem] = camera
+                if i % 100 == 0:
+                    state.save()
+                counter.add(size)
+                items.append(item)
+                skipped += was_there
+                if on_photo:
+                    on_photo(size)
+        finally:
+            state.save()
 
     log(f"Done: {len(items) - skipped} imported" + (f", {skipped} were already on the PC" if skipped else "") + ".")
     warn_remaining(card, set(), dry_run, log)
     return items
 
 
-def import_photo(src: Path, album_dir: Path, card_backup_dir: Path, exif: ExifTool) -> tuple[ImportItem, bool]:
-    """Copy, name by capture time, move the original on the card. Returns (item, was already on the PC)."""
+def import_photo(src: Path, album_dir: Path, card_backup_dir: Path,
+                 exif: ExifTool) -> tuple[ImportItem, bool, str]:
+    """Copy, name by capture time, move the original on the card.
+
+    Returns (item, whether it was already on the PC, its camera).
+    """
     tmp = album_dir / (src.name + ".part")  # ".part" is never taken for a photo, e.g. by the backup
     shutil.copy2(src, tmp)
     try:
-        capture_time = exif.capture_time(tmp)
+        capture_time, camera = exif.capture_info(tmp)
         if not capture_time:
             raise AlbumflowError(f"No usable capture time in {src}")
         name = new_name(capture_time, src)
@@ -201,8 +212,10 @@ def import_photo(src: Path, album_dir: Path, card_backup_dir: Path, exif: ExifTo
         if item.card_backup.exists():
             raise AlbumflowError(f"{item.card_backup} already exists, but {src} is still in DCIM. "
                                  "Please check by hand which one is right.")
-        was_there = item.pc.exists()
-        if was_there and not same_content(tmp, item.pc):
+        # Already imported and clock-corrected since? (Its content differs then, by design.)
+        corrected = [p for p in album_dir.glob(f"*-{name}") if clock.split_name(p.name) == (p.name[:15], name)]
+        was_there = item.pc.exists() or bool(corrected)
+        if item.pc.exists() and not same_content(tmp, item.pc):
             raise AlbumflowError(f"{item.pc} already exists with different content than {src}")
         if not was_there:
             tmp.replace(item.pc)
@@ -210,7 +223,7 @@ def import_photo(src: Path, album_dir: Path, card_backup_dir: Path, exif: ExifTo
         tmp.unlink(missing_ok=True)
     item.card_backup.parent.mkdir(parents=True, exist_ok=True)
     os.rename(src, item.card_backup)
-    return item, was_there
+    return item, was_there, camera
 
 
 def dry_run_card(card: Path, sources: list[Path], album_dir: Path, card_backup_dir: Path,
@@ -276,6 +289,9 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
     if error:
         raise AlbumflowError(f"Import done, but the backup failed: {error}\n"
                              "The photos are safe on the PC and the card; run backup-raw again later.")
+    album_dir = config.album_dir(topic, album)
+    if clock.has_measurements(album_dir):  # the originals are on the backup now
+        clock.apply(album_dir, parallel.dest_dir, log=log)
     if remove_drive and parallel.drive:
         backup.remove_backup_drive(parallel.drive, log)
     return items

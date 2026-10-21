@@ -28,6 +28,10 @@ CARD_BACKUP_DIR = "Backup"
 # albumflow offers to delete old folders in <card>\Backup.
 CARD_MIN_FREE = 0.5
 
+# Camera clock correction: the other cameras' photos are put in order relative
+# to this camera (model, as exiftool reports it). Its own photos are never changed.
+MASTER_CAMERA = "ILCE-9M2"
+
 _EXIFTOOL_CANDIDATES = [r"C:\Program Files\digiKam\exiftool\exiftool.exe"]
 
 
