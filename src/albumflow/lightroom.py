@@ -78,6 +78,12 @@ def check(folders: list[Path], catalogs: list[Path] | None = None) -> Report:
     return _report(_rows(catalogs), folders)
 
 
+def check_each(folders: list[Path], catalogs: list[Path] | None = None) -> list[Report]:
+    """check() for each folder separately, reading the catalogs only once."""
+    rows = _rows(catalogs)
+    return [_report(rows, [f]) for f in folders]
+
+
 def refuse_if_unsafe(report: Report, relative_to: Path) -> None:
     """Raise if moving would leave work only in the catalog, naming the folders."""
     def lines(counts: dict[Path, int], what: str) -> str:

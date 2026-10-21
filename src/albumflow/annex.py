@@ -19,7 +19,9 @@ Only depends on generic helpers, so it could become its own tool later.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -370,3 +372,64 @@ def annexed_folders(below: Path) -> list[Path]:
                 if name.endswith(config.ANNEX_SUFFIX):
                     found.append(folder_of(path))
     return sorted(found)
+
+
+# --- suggestions: what to move to the annex to free space ---
+
+@dataclass
+class Candidate:
+    folder: Path
+    size: int  # bytes, including subfolders
+    newest: float  # modification time of the newest file
+    score: float = 0.0
+
+
+def _scan(folder: Path) -> tuple[int, float]:
+    """(total size, newest modification time) of the files below folder; junctions not followed."""
+    size, newest = 0, 0.0
+    stack = [folder]
+    while stack:
+        with os.scandir(stack.pop()) as it:
+            for entry in it:
+                if entry.is_dir(follow_symlinks=False):
+                    if not entry.is_junction():
+                        stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    st = entry.stat(follow_symlinks=False)  # on Windows from the listing, no extra I/O
+                    size += st.st_size
+                    newest = max(newest, st.st_mtime)
+    return size, newest
+
+
+def candidate_folders(root: Path) -> list[Path]:
+    """The folders below root (or root itself) that directly contain files.
+
+    Junctions (already in the annex), interrupted moves and folders matching
+    config.EXCLUDED_ALBUM_PATTERNS are left out.
+    """
+    found = []
+    stack = [root] if root.is_dir() and not is_link(root) else []
+    while stack:
+        folder = stack.pop()
+        if folder.name.endswith(PART) or has_note(folder) or any(
+                re.search(p, folder.name, re.IGNORECASE) for p in config.EXCLUDED_ALBUM_PATTERNS):
+            continue
+        entries = list(os.scandir(folder))
+        if any(e.is_file(follow_symlinks=False) and e.name.lower() != "desktop.ini" for e in entries):
+            found.append(folder)  # a candidate, with everything below it
+        else:
+            stack.extend(Path(e.path) for e in entries if e.is_dir(follow_symlinks=False) and not e.is_junction())
+    return found
+
+
+def suggestions(roots: list[Path], now: float | None = None, age_days: float | None = None) -> list[Candidate]:
+    """All candidates below roots, highest score first."""
+    now = time.time() if now is None else now
+    age_days = config.ANNEX_AGE_DAYS if age_days is None else age_days
+    result = []
+    for root in roots:
+        for folder in candidate_folders(root):
+            size, newest = _scan(folder)
+            age = max(0.0, (now - newest) / 86400)
+            result.append(Candidate(folder, size, newest, size / 1e9 * (1 - math.exp(-age / age_days))))
+    return sorted(result, key=lambda c: c.score, reverse=True)

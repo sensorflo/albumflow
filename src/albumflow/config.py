@@ -36,6 +36,18 @@ HOME_FOLDER = Path(os.environ.get("ALBUMFLOW_HOME_FOLDER", r"C:\Users\senso"))
 # ".backup-source-sd" is the old name, accepted until the card has been switched.
 ANNEX_MARKERS = [".annex", ".backup-source-sd"]
 ANNEX_SUFFIX = " (annex)"
+# Where `to-annex` without a folder looks for candidates (relative to HOME_FOLDER). A
+# candidate is a folder that directly contains files, with everything below it.
+ANNEX_SUGGEST_ROOTS = [
+    R"Large\Pictures\Pictures\new",
+    R"Large\Pictures\Pictures\new-old",
+    R"Large\Pictures\Rejected",
+    R"Large\Pictures\Originals",
+]
+ANNEX_SUGGESTIONS = 20
+# Suggestion score = size in GB * (1 - e^(-age / ANNEX_AGE_DAYS)), age = days since the
+# newest file in the folder was modified: recently worked on scores near 0.
+ANNEX_AGE_DAYS = 180
 # Folders are not moved while one of these may be modifying files (like backup.py's list, but without
 # digikam.exe, which may run during moves).
 APPS_MODIFYING_FILES = {"darktable.exe", "ansel.exe", "Lightroom.exe", "emdb.exe"}

@@ -538,7 +538,7 @@ def _annex_album_candidates() -> list[album_choice.Album]:
 
 
 def to_annex_folder(target: str) -> Path:
-    """The folder to move to the annex: a path, or a loose album query (none: recent albums)."""
+    """The folder to move to the annex: a path, or a loose album query."""
     if looks_like_path(target):
         path = as_path(target)
         if annex.is_annex_link(path):
@@ -588,13 +588,80 @@ def lightroom_hint(report: lightroom.Report, log) -> None:
             "Library > Folders > right-click it > Find Missing Folder.")
 
 
+def move_to_annex(folder: Path, display: ProgressDisplay, dry_run: bool) -> None:
+    report = check_lightroom([folder])
+    annex.to_annex(folder, log=display.log, progress=_annex_bar(display, "to annex"), dry_run=dry_run)
+    if not dry_run:
+        lightroom_hint(report, display.log)
+
+
 def cmd_to_annex(args) -> int:
     display = ProgressDisplay()
-    folder = to_annex_folder(args.target)
-    report = check_lightroom([folder])
-    annex.to_annex(folder, log=display.log, progress=_annex_bar(display, "to annex"), dry_run=args.dry_run)
-    if not args.dry_run:
-        lightroom_hint(report, display.log)
+    if not args.target:
+        return suggest_for_annex(display, args.dry_run)
+    move_to_annex(to_annex_folder(args.target), display, args.dry_run)
+    return 0
+
+
+def ago(timestamp: float, today: datetime.date | None = None) -> str:
+    """How long ago: 'today', 'yesterday', '5 days', '3 weeks', '7 months', '2 years'."""
+    if not timestamp:
+        return "-"
+    days = ((today or datetime.date.today()) - datetime.date.fromtimestamp(timestamp)).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    for limit, unit, size in ((14, "day", 1), (60, "week", 7), (730, "month", 30.44)):
+        if days < limit:
+            return f"{round(days / size)} {unit}s"
+    return f"{round(days / 365.25)} years"
+
+
+def suggest_for_annex(display: ProgressDisplay, dry_run: bool, ask=input) -> int:
+    """Propose the folders whose move frees most space, weighted by age; move the chosen ones."""
+    home = annex.home()
+    print("Looking for candidates in " + ", ".join(config.ANNEX_SUGGEST_ROOTS) + " ...")
+    candidates = annex.suggestions([home / r for r in config.ANNEX_SUGGEST_ROOTS])[:config.ANNEX_SUGGESTIONS]
+    if not candidates:
+        print("No candidates found.")
+        return 0
+    try:
+        reports = lightroom.check_each([c.folder for c in candidates])
+    except AlbumflowError as e:
+        print(f"Warning: {e}; Lightroom is checked again before each move.")
+        reports = [None] * len(candidates)
+
+    usage = shutil.disk_usage(home)
+    print(f"\nSuggestions for the annex ({home.drive} has {usage.free / usage.total:.0%} free):\n")
+    print(f"{'':>2} {'GB':>4}  {'idle':<9}  album")
+    for i, (c, report) in enumerate(zip(candidates, reports), 1):
+        warning = ""
+        if report and report.unsaved:
+            warning = f"  ! Lightroom: {sum(report.unsaved.values())} unsaved"
+        if report and report.virtual:
+            warning += f"  ! Lightroom: {sum(report.virtual.values())} virtual copies"
+        print(f"{i:>2} {c.size / 1e9:4.0f}  {ago(c.newest):<9}  {c.folder.name}   "
+              f"({c.folder.parent.relative_to(home)}){warning}")
+    total = sum(c.size for c in candidates)
+    print(f"\nMoving all {len(candidates)} would free {total / 1e9:.0f} GB "
+          f"({home.drive} {usage.free / usage.total:.0%} -> {(usage.free + total) / usage.total:.0%} free).")
+    answer = ask("Move which? (e.g. 1 3 or 1-4; Enter: none): ")
+    selection = parse_selection(answer, len(candidates))
+    if selection is None:
+        print(f"Not understood: {answer!r}; nothing moved.")
+        return 0
+    failed = []
+    for i in selection:
+        folder = candidates[i - 1].folder
+        try:
+            move_to_annex(folder, display, dry_run)
+        except AlbumflowError as e:
+            display.log(f"Skipped {folder.relative_to(home)}: {e}")
+            failed.append(folder)
+    if failed:
+        display.log(f"{len(failed)} of {len(selection)} not moved, see above.")
+        return 2
     return 0
 
 
@@ -730,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     folder_help = "a path ('.', './foo', '~/Music/x', 'C:\\...'), or else a loose album query like 'party/secret'"
     p = sub.add_parser("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place")
     p.add_argument("target", nargs="?", default="", metavar="folder",
-                   help=folder_help + "; none: the most recent albums")
+                   help=folder_help + "; none: suggestions (large and long untouched first) to choose from")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_to_annex)
 
