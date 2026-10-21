@@ -235,12 +235,37 @@ def offset_text(state: AlbumState, camera: str) -> str:
     return f"{master}, {true_time}"
 
 
+def copy_readings(source_dir: Path, target_dir: Path, source_name: str) -> tuple[list[str], list[str]]:
+    """Take over another album's clock readings (and assumptions), e.g. of the same festival.
+
+    The target's own readings are kept. Returns (cameras taken over, cameras kept).
+    """
+    source, target = AlbumState(source_dir), AlbumState(target_dir)
+    if not (source.clock or source.assumed):
+        raise AlbumflowError(f"{source_name} has no clock readings")
+    taken, kept = [], []
+    for camera, reading in source.clock.items():
+        if camera in target.clock:
+            kept.append(camera)
+        else:
+            target.clock[camera] = {**reading, "from": reading.get("from", source_name)}
+            target.assumed = [c for c in target.assumed if c != camera]
+            taken.append(camera)
+    for camera in source.assumed:
+        if camera not in target.clock and camera not in target.assumed:
+            target.assumed.append(camera)
+            taken.append(camera)
+    target.save()
+    return taken, kept
+
+
 def describe(state: AlbumState) -> list[str]:
     """Human-readable lines about the measurements, the master first."""
     lines = []
     for camera in sorted(state.clock, key=lambda c: (not is_master(c), model(c))):
         m = state.clock[camera]
-        lines.append(f"  {camera_label(camera)}: clock photo {m['photo']} showed {m['clock']}; "
+        source = f" (from {m['from']})" if m.get("from") else ""
+        lines.append(f"  {camera_label(camera)}: clock photo {m['photo']}{source} showed {m['clock']}; "
                      f"{offset_text(state, camera)}")
     for camera in sorted(state.assumed, key=lambda c: (not is_master(c), model(c))):
         lines.append(f"  {camera_label(camera)}: no clock reading, assumed in sync with the master")

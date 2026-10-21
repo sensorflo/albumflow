@@ -261,3 +261,45 @@ def test_default_photo_moves_on_after_each_reading(album, monkeypatch):
     cli.main(["sc", "party/fest"])
     # both defaults are the master's photos: the second reading (the next photo) replaced the first
     assert clock.AlbumState(album).clock["MASTER"]["photo"] == "20260828T120100-_DSC0002.JPG"
+
+
+def test_readings_from_another_album(album, monkeypatch, capsys):
+    from albumflow import cli
+    album, ssd = album
+    other = album.parent / "fest OnlyForMe"
+    other.mkdir()
+    with ExifTool() as exif:
+        readings(album, exif, ("20260828T120000-_DSC0001.JPG", "12:00:00"))
+    state = clock.AlbumState(other)
+    state.clock["OTHER"] = {"offset": 7, "photo": "own.JPG", "clock": "10:00:00"}
+    state.save()
+
+    taken, kept = clock.copy_readings(album, other, "party/fest")
+    assert taken == ["MASTER"] and kept == []
+    state = clock.AlbumState(other)
+    assert state.clock["MASTER"]["from"] == "party/fest"
+    assert state.clock["OTHER"]["offset"] == 7  # its own reading stays
+    assert any("(from party/fest)" in line for line in clock.describe(state))
+
+
+def test_readings_from_option_with_loose_album_name(album, monkeypatch, capsys):
+    from albumflow import cli
+    album, ssd = album
+    other = album.parent / "fest OnlyForMe"
+    other.mkdir()
+    with ExifTool() as exif:
+        readings(album, exif, ("20260828T120000-_DSC0001.JPG", "12:00:00"))
+    monkeypatch.setattr(backup, "find_backup_drive", lambda drive=None: None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")  # "fest" is ambiguous: pick from the list
+    assert cli.main(["sc", "party/fest onlyforme", "--readings-from", "fest"]) == 0
+    assert clock.AlbumState(other).clock["MASTER"]["from"] == "party/fest"
+    assert "taken over from party/fest" in capsys.readouterr().err
+
+
+def test_readings_from_album_without_readings(album):
+    album, ssd = album
+    other = album.parent / "empty"
+    other.mkdir()
+    from albumflow.files import AlbumflowError
+    with pytest.raises(AlbumflowError, match="has no clock readings"):
+        clock.copy_readings(other, album, "party/empty")

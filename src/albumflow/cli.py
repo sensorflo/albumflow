@@ -14,7 +14,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import album_choice, annex, backup, card_import, clock, config, gphotos_api, gphotos_sync, lightroom
+from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, gphotos_api,
+                       gphotos_sync, lightroom)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -460,10 +461,20 @@ def cmd_sync_clocks(args) -> int:
             raise AlbumflowError(f"Expected PHOTO=TIME, got {reading!r}")
         readings.append((find_photo(album_dir, photo), parse_clock_time(text)))
 
+    if args.readings_from:  # e.g. another album of the same festival
+        log(f"Clock readings from another album, for {args.topic}/{args.album}:")
+        others = [a for a in album_choice.albums() if (a.topic, a.name) != (args.topic, args.album)]
+        topic, album = choose_album(args.readings_from, create=False, candidates=others)
+        taken, kept = clock.copy_readings(config.album_dir(topic, album), album_dir, f"{topic}/{album}")
+        for camera in taken:
+            log(f"  {clock.camera_label(camera)}: taken over from {topic}/{album}")
+        for camera in kept:
+            log(f"  {clock.camera_label(camera)}: keeps this album's own reading")
+
     with ExifTool() as exif:
         for photo, clock_time in readings:
             record_reading(album_dir, photo, clock_time, exif, log)
-        if not args.reading and not args.assume_in_sync:  # ask for clock readings
+        if not (args.reading or args.assume_in_sync or args.readings_from):  # ask for clock readings
             files = _one_file_per_photo(album_dir)
             default = files[0].name if files else ""
             log("Clock readings: photo of the clock, then the time it shows.")
@@ -746,12 +757,17 @@ def cmd_backup(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    # Album titles and filenames may contain characters the Windows console
-    # code page can't show; never crash on output.
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+def cmd_completion(args) -> int:
+    script = completion.powershell(build_parser(), ["albumflow", "af"])
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(script, encoding="utf-8")
+    else:
+        sys.stdout.write(script)
+    return 0
 
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="albumflow",
                                      epilog="albumflow <subcommand> -h shows the options of a subcommand.")
     sub = parser.add_subparsers(dest="target", required=True)
@@ -790,6 +806,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="a clock photo (part of its name is enough) and the time the clock in it shows, "
                         "e.g. _DSC7115=09:28:54; repeat for each camera. Without any: asked for")
     p.add_argument("--drive", help=f"backup drive (default: the one with a {config.BACKUP_MARKER} file)")
+    p.add_argument("--readings-from", metavar="topic/album",
+                   help="take over the clock readings of another album, e.g. of the same festival (loose "
+                        "topic/album like the album itself); this album's own readings are kept")
     p.add_argument("--assume-in-sync", action="append", metavar="MODEL",
                    help="a camera that took no clock photo, treated as in sync with the master, e.g. ILCE-7M3")
     p.set_defaults(func=cmd_sync_clocks)
@@ -824,6 +843,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_gphotos_sync)
 
+    p = sub.add_parser("completion", help="print a tab completion script for a shell (PowerShell)")
+    p.add_argument("shell", choices=["powershell"])
+    p.add_argument("-o", "--output", help="write it to this file instead")
+    p.set_defaults(func=cmd_completion)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Album titles and filenames may contain characters the Windows console
+    # code page can't show; never crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+    parser = build_parser()
     if not (sys.argv[1:] if argv is None else argv):  # no subcommand: the same as -h
         parser.print_help()
         return 0

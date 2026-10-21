@@ -233,6 +233,9 @@ taken. Exact time doesn't matter.
   reading. A camera added later by an import pauses them, with a hint, until
   it has one. `--assume-in-sync MODEL` records that a camera without a clock
   photo is treated as in sync with the master.
+- `--readings-from <topic/album>` takes over the readings of another album, e.g.
+  of the same festival (offsets are constant per festival); loose topic/album
+  with a list unless unambiguous; the album's own readings are kept.
 - **Master time**: the time the master camera (`MASTER_CAMERA` in config,
   ILCE-9M2) would have shown. A camera's offset from the master is its offset
   from the clock minus the master's. Offsets are constant per festival.
