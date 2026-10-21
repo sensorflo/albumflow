@@ -9,6 +9,7 @@ most recently modified album (folder time: last photo added or removed).
 from __future__ import annotations
 
 import difflib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,8 +48,9 @@ def albums(root: Path | None = None) -> list[Album]:
     found = []
     for topic in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
         for album in topic.iterdir():
-            if album.is_dir() and not any(re.search(p, album.name, re.IGNORECASE)
-                                          for p in config.EXCLUDED_ALBUM_PATTERNS):
+            # A junction is an album moved to the annex: not offered (writing there would be slow).
+            if album.is_dir() and not os.path.isjunction(album) and not any(
+                    re.search(p, album.name, re.IGNORECASE) for p in config.EXCLUDED_ALBUM_PATTERNS):
                 found.append(Album(topic.name, album.name, album.stat().st_mtime))
     return found
 

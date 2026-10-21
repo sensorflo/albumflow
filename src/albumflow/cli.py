@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import datetime
+import os
 import re
 import shutil
 import sys
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import album_choice, backup, card_import, clock, config, gphotos_api, gphotos_sync
+from albumflow import album_choice, annex, backup, card_import, clock, config, gphotos_api, gphotos_sync
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -176,6 +177,35 @@ def _console_keys() -> bool:
     return sys.stdin.isatty()
 
 
+def ask_key(prompt: str, keys: str) -> str:
+    """One key press out of keys (lower case); others are ignored, Esc counts as 'q'.
+
+    Without a real console (e.g. Git Bash's mintty), a letter plus Enter instead.
+    """
+    if _console_keys():
+        import msvcrt
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        while True:
+            ch = msvcrt.getwch()
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch in ("\x00", "\xe0"):  # arrow and function keys
+                msvcrt.getwch()
+                continue
+            key = "q" if ch == "\x1b" and "q" in keys else ch.lower()
+            if key in keys:
+                print(key)
+                return key
+    while True:
+        try:
+            answer = input(prompt).strip().lower()
+        except EOFError:
+            return "q" if "q" in keys else keys[0]
+        if len(answer) == 1 and answer in keys:
+            return answer
+
+
 def _edit_line(prompt: str, text: str) -> str:
     """Read a line with text already typed in. Backspace deletes, Esc clears, Enter accepts."""
     import msvcrt
@@ -323,9 +353,13 @@ def _age(mtime: float) -> str:
     return f"modified {datetime.date.fromtimestamp(mtime):%Y-%m-%d}"
 
 
-def choose_album(query: str, create: bool, ask=None, out=print) -> tuple[str, str]:
-    """Resolve a loosely typed "topic/album" to (topic, album), asking if it isn't exact."""
-    candidates = album_choice.albums()
+def choose_album(query: str, create: bool, ask=None, out=print,
+                 candidates: list[album_choice.Album] | None = None) -> tuple[str, str]:
+    """Resolve a loosely typed "topic/album" to (topic, album), asking if it isn't exact.
+
+    candidates: the albums to choose from (default: the albums in config.PICTURES_NEW).
+    """
+    candidates = album_choice.albums() if candidates is None else candidates
     ask = ask or input  # looked up now, not at import
     try:
         topic, name = album_choice.split_query(query)
@@ -484,6 +518,133 @@ def cmd_sync_clocks(args) -> int:
     return 0
 
 
+def looks_like_path(text: str) -> bool:
+    """'.', './foo', '~/x', '/x', '\\x', 'C:...' are paths; anything else is a loose album query."""
+    return text.startswith((".", "~", "/", "\\")) or bool(re.match(r"^[A-Za-z]:", text))
+
+
+def as_path(text: str) -> Path:
+    return Path(os.path.abspath(os.path.expanduser(text)))
+
+
+def _annex_album_candidates() -> list[album_choice.Album]:
+    """The albums in config.PICTURES_NEW that are currently in the annex."""
+    found = []
+    for folder in annex.annexed_folders(config.PICTURES_NEW):
+        rel = folder.relative_to(config.PICTURES_NEW)
+        if len(rel.parts) == 2:
+            found.append(album_choice.Album(rel.parts[0], rel.parts[1], os.lstat(annex.link_of(folder)).st_mtime))
+    return found
+
+
+def to_annex_folder(target: str) -> Path:
+    """The folder to move to the annex: a path, or a loose album query (none: recent albums)."""
+    if looks_like_path(target):
+        path = as_path(target)
+        if annex.is_annex_link(path):
+            raise AlbumflowError(f"{path.name} is already in the annex")
+        return path
+    topic, album = choose_album(target, create=False)
+    return config.album_dir(topic, album)
+
+
+def from_annex_folder(target: str) -> Path:
+    """The folder to move back: its link or annex path, or a loose query among annexed albums."""
+    if looks_like_path(target):
+        path = as_path(target)
+        if path.name.endswith(config.ANNEX_SUFFIX):
+            return annex.folder_of(path)
+        drive = annex.find_annex()
+        if drive:
+            try:
+                return annex.home() / path.relative_to(Path(os.path.abspath(drive)))
+            except ValueError:
+                pass  # not a path in the annex
+        return path
+    candidates = _annex_album_candidates()
+    if not candidates:
+        raise AlbumflowError("No albums in the annex; for other folders, give their path")
+    topic, album = choose_album(target, create=False, candidates=candidates)
+    return config.album_dir(topic, album)
+
+
+def _annex_bar(display: ProgressDisplay, direction: str):
+    drive = annex.find_annex()
+    label = f"{direction} {drive_description(drive)}" if drive else direction
+    return display.bar(label)
+
+
+def cmd_to_annex(args) -> int:
+    display = ProgressDisplay()
+    annex.to_annex(to_annex_folder(args.target), log=display.log, progress=_annex_bar(display, "to annex"),
+                   dry_run=args.dry_run)
+    return 0
+
+
+def cmd_from_annex(args) -> int:
+    display = ProgressDisplay()
+    annex.from_annex(from_annex_folder(args.target), log=display.log,
+                     progress=_annex_bar(display, "from annex"), dry_run=args.dry_run)
+    return 0
+
+
+def print_entry(e: annex.Entry, prefix: str = "") -> None:
+    """Three lines: what it is, then (indented) its two sides."""
+    linked = e.kind in ("ok", "broken link", "missing link")
+    home_side = annex.link_of(e.home_path) if linked else e.home_path
+    print(f"{prefix}{e.kind}")
+    print(f"  home:  {home_side}")
+    print(f"  annex: {e.annex_path if e.annex_path else '(nothing there)'}")
+
+
+def cmd_annex_status(args) -> int:
+    drive = annex.require_annex()
+    entries = annex.status(drive)
+    ok = [e for e in entries if not e.problem]
+    problems = [e for e in entries if e.problem]
+    for e in (ok if args.verbose else []) + problems:
+        print_entry(e)
+        print()
+    counts = {kind: sum(1 for e in problems if e.kind == kind) for kind in dict.fromkeys(e.kind for e in problems)}
+    summary = f"Annex {drive_description(drive)}: {len(ok)} folders linked correctly"
+    if not problems:
+        print(f"{summary}, no problems.")
+        return 0
+    fixable = [e for e in problems if e.kind == "missing link"]
+    hints = {
+        "missing link": "in the annex, but no link at its place in the home folder (--fix creates it)",
+        "broken link": "a link whose folder in the annex is gone or elsewhere",
+        "in both places": ("a folder that directly contains regular files (not only subfolders), "
+                           "both in the home folder and in the annex; check by hand"),
+        "interrupted": "an interrupted move; run the same to-annex/from-annex again to continue",
+        "no folder on C:": ("its parent folder doesn't exist in the home folder, or it is directly in the "
+                            "home folder and contains only subfolders; never linked automatically "
+                            "(layout not mirrored?)"),
+    }
+    for kind in counts:
+        print(f"  {kind}: {hints[kind]}")
+    print()
+    print(f"{summary}; {len(problems)} problem(s): " + ", ".join(f"{n} {kind}" for kind, n in counts.items()) + ".")
+    if args.fix and fixable:
+        print()
+        print(f"{len(fixable)} missing link(s). For each: y = create, n = skip, "
+              "a = create this and all remaining, q = stop.")
+        create_all = False
+        for i, e in enumerate(fixable, 1):
+            if not create_all:
+                print()
+                print_entry(e, f"[{i}/{len(fixable)}] ")
+                answer = ask_key("Create the link? [y/n/a/q] ", "ynaq")
+                if answer == "q":
+                    break
+                if answer == "n":
+                    continue
+                create_all = answer == "a"
+            annex.fix_link(e)
+            print(f"  linked {annex.link_of(e.home_path)}")
+    return 1
+
+
 def cmd_backup(args) -> int:
     display = ProgressDisplay()
     drive = _path(args.drive)
@@ -542,6 +703,24 @@ def main(argv: list[str] | None = None) -> int:
                    help="a camera that took no clock photo, treated as in sync with the master, e.g. ILCE-7M3")
     p.set_defaults(func=cmd_sync_clocks)
 
+    folder_help = "a path ('.', './foo', '~/Music/x', 'C:\\...'), or else a loose album query like 'party/secret'"
+    p = sub.add_parser("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place")
+    p.add_argument("target", nargs="?", default="", metavar="folder",
+                   help=folder_help + "; none: the most recent albums")
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_to_annex)
+
+    p = sub.add_parser("from-annex", help="move a folder back from the annex drive, replacing its link")
+    p.add_argument("target", nargs="?", default="", metavar="folder",
+                   help=folder_help + "; or its '(annex)' link; none: the most recent albums in the annex")
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_from_annex)
+
+    p = sub.add_parser("annex-status", help="list what is in the annex, and problems such as missing links")
+    p.add_argument("--fix", action="store_true", help="create missing links (asks first)")
+    p.add_argument("-v", "--verbose", action="store_true", help="also list the folders that are fine")
+    p.set_defaults(func=cmd_annex_status)
+
     p = sub.add_parser("gphotos-login", help="log in to Google Photos (opens the browser)")
     p.set_defaults(func=cmd_gphotos_login)
 
@@ -565,7 +744,7 @@ def main(argv: list[str] | None = None) -> int:
     except (gphotos_api.ApiError, AlbumflowError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
-    except KeyboardInterrupt:  # Ctrl+C: no traceback; imports can simply be run again
+    except KeyboardInterrupt:  # Ctrl+C: no traceback; moves and imports can simply be run again
         print("\nAborted.", file=sys.stderr)
         return 130
 

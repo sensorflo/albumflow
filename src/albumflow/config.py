@@ -28,6 +28,18 @@ CARD_BACKUP_DIR = "Backup"
 # albumflow offers to delete old folders in <card>\Backup.
 CARD_MIN_FREE = 0.5
 
+# The annex: a drive holding moved-out folders of the home folder, mirroring it:
+# <annex>\<path> is what would be <HOME_FOLDER>\<path>. At the folder's place on
+# C: there is a junction named "<name><ANNEX_SUFFIX>" pointing to the annex.
+HOME_FOLDER = Path(os.environ.get("ALBUMFLOW_HOME_FOLDER", r"C:\Users\senso"))
+# Found by a marker file in its root; backup.py uses the same marker (keep both in sync).
+# ".backup-source-sd" is the old name, accepted until the card has been switched.
+ANNEX_MARKERS = [".annex", ".backup-source-sd"]
+ANNEX_SUFFIX = " (annex)"
+# Folders are not moved while one of these may be modifying files (like backup.py's list, but without
+# digikam.exe, which may run during moves).
+APPS_MODIFYING_FILES = {"darktable.exe", "ansel.exe", "Lightroom.exe", "emdb.exe"}
+
 # Camera clock correction: the other cameras' photos are put in order relative
 # to this camera (model, as exiftool reports it). Its own photos are never changed.
 MASTER_CAMERA = "ILCE-9M2"
