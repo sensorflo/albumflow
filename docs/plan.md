@@ -341,3 +341,9 @@ To do:
   milestone 3.
 - Exact export settings per target (sizes, quality, watermarks).
 - Details of the import step, including how renaming is done today.
+- `sync-clocks --dry-run` changes no photos, but still writes the album's
+  state file: the camera cache (fine, it is only a cache) and also readings
+  and assumptions given with `-r`, `--assume-in-sync` or `--readings-from`
+  (not fine: a later real run uses them). Proposal: in a dry run, keep the
+  latter in memory only, and say in the help "doesn't change photos or clock
+  readings".
