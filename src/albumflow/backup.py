@@ -1,0 +1,196 @@
+"""Back up an album's raw originals to the external backup drive.
+
+Only adds files, never deletes or overwrites: photos culled on the PC later
+stay on the backup.
+"""
+
+from __future__ import annotations
+
+import threading
+from pathlib import Path
+from typing import Callable
+
+from albumflow import config
+from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
+
+
+POLL_SECONDS = 2.0  # how often to look for the backup drive
+
+
+def find_backup_drive(drive: Path | None = None) -> Path | None:
+    """The given drive if it is connected, else the one with the marker file; None if not connected."""
+    if drive is not None:
+        return drive if drive.exists() else None
+    found = [d for d in drives() if (d / config.BACKUP_MARKER).is_file()]
+    if len(found) > 1:
+        raise AlbumflowError(f"Several backup drives found: {', '.join(str(d) for d in found)}")
+    return found[0] if found else None
+
+
+def wait_for_backup_drive(drive: Path | None = None, log=print, stop: threading.Event | None = None) -> Path | None:
+    """Wait until the backup drive is connected. Returns None if stop is set first."""
+    found = find_backup_drive(drive)
+    if found:
+        return found
+    what = drive or f"a drive with a {config.BACKUP_MARKER} file"
+    log(f"Waiting for the backup drive ({what})...")
+    found = poll_until(lambda: find_backup_drive(drive), POLL_SECONDS, stop)
+    if found:
+        log(f"Backup drive {found} connected.")
+    return found
+
+
+def backup_dir(drive: Path, album: str) -> Path:
+    return drive / config.BACKUP_DIR / album
+
+
+def missing_on_backup(source_dir: Path, dest_dir: Path) -> list[tuple[Path, Path]]:
+    """(source, destination) of every original in source_dir not yet on the backup."""
+    todo = []
+    for src in sorted(source_dir.iterdir()):
+        if not (src.is_file() and src.suffix.lower() in config.CAMERA_SUFFIXES):
+            continue  # also skips ".part" files of copies in progress
+        dest = dest_dir / src.name
+        if not dest.exists():
+            todo.append((src, dest))
+        # Comparing sizes keeps re-runs fast; a partly written copy never has the final name.
+        elif src.stat().st_size != dest.stat().st_size:
+            raise AlbumflowError(f"{dest} already exists with a different size than {src}")
+    return todo
+
+
+def backup_raw(topic: str, album: str, drive: Path | None = None, dry_run: bool = False,
+               log=print, progress: Progress | None = None, remove_drive: bool = False) -> None:
+    """Copy the album's originals missing on the backup drive; with remove_drive, remove it at the end."""
+    source_dir = config.album_dir(topic, album)
+    if not source_dir.is_dir():
+        raise AlbumflowError(f"Album folder not found: {source_dir}")
+    if dry_run:
+        drive = find_backup_drive(drive)
+        if drive is None:
+            log("The backup drive is not connected; the backup would wait for it.")
+            return
+    else:
+        drive = wait_for_backup_drive(drive, log)
+    dest_dir = backup_dir(drive, album)
+
+    todo = missing_on_backup(source_dir, dest_dir)
+    log(f"{len(todo)} originals in {source_dir} to back up to {dest_dir}")
+    if dry_run:
+        for src, _ in todo:
+            log(f"  {src.name}")
+        return
+    counter = ByteCounter(sum(src.stat().st_size for src, _ in todo), progress)
+    for src, dest in todo:
+        counter.start(src.name)
+        copy_file(src, dest, counter.add)
+    log("Backup done.")
+    if remove_drive:
+        remove_backup_drive(dest_dir, log)
+
+
+def remove_backup_drive(path: Path, log=print) -> None:
+    """Safely remove the backup drive; failing is only a warning, the backup itself succeeded."""
+    try:
+        remove_device(Path(path.anchor))
+        log(f"Removed {path.anchor}; it can be unplugged.")
+    except AlbumflowError as e:
+        log(f"Warning: {e}. Please remove it by hand.")
+
+
+class ParallelBackup:
+    """Backs up an album in a background thread while it is still being imported.
+
+    The thread repeatedly copies whatever is on the PC but not yet on the
+    backup, until the import is finished and everything is copied. The import
+    announces the size of each card's photos with expect() and each photo that
+    has arrived on the PC with arrived(), so the progress total also covers
+    photos that are still on the card.
+
+    The backup drive may be connected later: the backup starts once it appears.
+    on_drive(drive) is called then (e.g. to label a progress bar).
+
+    An error stops only the backup; it is kept in .error, and the import goes on.
+    """
+
+    def __init__(self, topic: str, album: str, drive: Path | None = None, log=print,
+                 progress: Progress | None = None, poll_seconds: float = 1.0,
+                 on_drive: Callable[[Path], None] | None = None):
+        self.album = album
+        self.source_dir = config.album_dir(topic, album)
+        self.wanted_drive = drive
+        self.drive: Path | None = None
+        self.dest_dir: Path | None = None
+        self.log, self.progress, self.poll_seconds, self.on_drive = log, progress, poll_seconds, on_drive
+        self._abort = threading.Event()
+        self.error: Exception | None = None
+        self._expected = 0  # bytes announced by the import
+        self._arrived = 0  # of these, bytes that have arrived on the PC
+        self._lock = threading.Lock()
+        self._import_finished = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="backup", daemon=True)
+        self._done = 0
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def expect(self, nbytes: int) -> None:
+        with self._lock:
+            self._expected += nbytes
+
+    def arrived(self, nbytes: int) -> None:
+        with self._lock:
+            self._arrived += nbytes
+
+    def finish(self, abort: bool = False) -> Exception | None:
+        """Tell the backup the import is over, wait until it is done, return its error if any.
+
+        If the backup drive isn't connected yet, this waits for it, unless abort.
+        """
+        if abort:
+            self._abort.set()
+        self._import_finished.set()
+        while self._thread.is_alive():
+            self._thread.join(0.5)  # in steps, so Ctrl+C works while waiting
+        return self.error
+
+    def _still_on_card(self) -> int:
+        with self._lock:
+            return self._expected - self._arrived
+
+    def _run(self) -> None:
+        try:
+            self.drive = wait_for_backup_drive(self.wanted_drive, self.log, stop=self._abort)
+            if self.drive is None:
+                return  # import failed before the drive was connected
+            self.dest_dir = backup_dir(self.drive, self.album)
+            if self.on_drive:
+                self.on_drive(self.drive)
+            while True:
+                # Read the flag before scanning: once the import is finished,
+                # no new files appear, so this scan is the last one needed.
+                finished = self._import_finished.is_set()
+                # Photos arriving after this point are not in todo, so they
+                # are counted as still on the card until the next scan.
+                still_on_card = self._still_on_card()
+                todo = missing_on_backup(self.source_dir, self.dest_dir) if self.source_dir.is_dir() else []
+                remaining = sum(src.stat().st_size for src, _ in todo)
+                for src, dest in todo:
+                    self._report(remaining + still_on_card, src.name)
+                    copy_file(src, dest)
+                    size = src.stat().st_size
+                    self._done += size
+                    remaining -= size
+                    self._report(remaining + still_on_card, src.name)
+                if finished:
+                    if self._done:
+                        self.log(f"Backup done: {self.dest_dir}")
+                    return
+                if not todo:
+                    self._import_finished.wait(self.poll_seconds)
+        except Exception as e:  # noqa: BLE001 - reported by finish()
+            self.error = e
+
+    def _report(self, left: int, name: str) -> None:
+        if self.progress:
+            self.progress(self._done, self._done + max(left, 0), name)

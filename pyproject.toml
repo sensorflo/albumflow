@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pillow"]
 
 [project.scripts]
 albumflow = "albumflow.cli:main"
