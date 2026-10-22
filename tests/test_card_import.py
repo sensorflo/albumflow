@@ -102,7 +102,7 @@ def test_backup_only_adds(setup):
     culled = sorted(photos(pc))[0]
     culled.unlink()
     backup.backup_raw("party", "fest", drive=drive, log=lambda *_: None)
-    assert len(list((drive / "for-backup-disc" / "fest").iterdir())) == 2
+    assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
 
 
 def test_topic_must_exist(setup):
@@ -154,7 +154,7 @@ def test_import_and_backup(setup):
     drive.mkdir()
     card_import.import_and_backup("party", "fest", card=card, drive=drive, create_album=True, log=lambda *_: None)
     assert len(list(photos(tmp / "new" / "party" / "fest"))) == 2
-    assert len(list((drive / "for-backup-disc" / "fest").iterdir())) == 2
+    assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
 
 
 def test_backup_drive_connected_later(setup, monkeypatch):
@@ -175,7 +175,7 @@ def test_backup_drive_connected_later(setup, monkeypatch):
     card_import.import_and_backup("party", "fest", card=card, create_album=True, log=lines.append,
                                   on_backup_drive=found.append)
     assert found == [ssd]
-    assert len(list((ssd / "for-backup-disc" / "fest").iterdir())) == 2
+    assert len(list((ssd / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
     assert any(line.startswith("Waiting for the backup drive") for line in lines)
 
 
@@ -277,7 +277,7 @@ def test_parallel_backup_covers_all_cards(setup, monkeypatch):
     calls = []
     card_import.import_and_backup("party", "fest", drive=drive, create_album=True, log=lambda *_: None,
                                   backup_progress=lambda done, total, name: calls.append((done, total)))
-    assert len(list((drive / "for-backup-disc" / "fest").iterdir())) == 3
+    assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 3
     assert calls[-1] == (sizes, sizes)
     assert all(done <= total <= sizes for done, total in calls)
 
@@ -287,7 +287,7 @@ def test_backup_total_includes_photos_still_on_card(tmp_path, monkeypatch):
     pc = tmp_path / "new" / "party" / "fest"
     pc.mkdir(parents=True)
     (pc / "a.ARW").write_bytes(b"x" * 10)  # on the PC, not yet backed up
-    dest = tmp_path / "ssd" / "for-backup-disc" / "fest"
+    dest = tmp_path / "ssd" / config.BACKUP_DIR / "party" / "fest"
     dest.mkdir(parents=True)
     (pc / "b.ARW").write_bytes(b"x" * 20)
     (dest / "b.ARW").write_bytes(b"x" * 20)  # already backed up before this run
@@ -303,7 +303,7 @@ def test_backup_total_includes_photos_still_on_card(tmp_path, monkeypatch):
 def test_failing_backup_does_not_stop_import(setup):
     card, tmp = setup
     drive = tmp / "ssd"
-    dest = drive / "for-backup-disc" / "fest"
+    dest = drive / config.BACKUP_DIR / "party" / "fest"
     dest.mkdir(parents=True)
     (dest / "20260828T120730-_DSC0001.JPG").write_bytes(b"different size")  # makes the backup fail
     with pytest.raises(AlbumflowError, match="backup failed"):
@@ -344,7 +344,7 @@ def test_import_removes_backup_drive_after_backup(setup, monkeypatch):
     monkeypatch.setattr(backup, "remove_device", removed.append)
     card_import.import_and_backup("party", "fest", card=card, drive=drive, create_album=True,
                                   log=lambda *_: None, remove_drive=True)
-    assert len(list((drive / "for-backup-disc" / "fest").iterdir())) == 2
+    assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
     assert removed == [Path(drive.anchor)]
 
 

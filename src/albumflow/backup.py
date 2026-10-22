@@ -42,8 +42,22 @@ def wait_for_backup_drive(drive: Path | None = None, log=print, stop: threading.
     return found
 
 
-def backup_dir(drive: Path, album: str) -> Path:
-    return drive / config.BACKUP_DIR / album
+def backup_dir(drive: Path, topic: str, album: str) -> Path:
+    """Where the album's originals are copied to."""
+    return drive / config.BACKUP_DIR / topic / album
+
+
+def album_backup_dir(drive: Path, topic: str, album: str) -> Path:
+    """Where the album's originals are on the backup drive: still waiting for the copy to the secondary
+    backup drive, or already copied."""
+    copied = drive / config.COPIED_DIR / topic / album
+    return copied if copied.is_dir() and not backup_dir(drive, topic, album).is_dir() else backup_dir(drive, topic, album)
+
+
+def backup_dirs_named(drive: Path, album: str) -> list[Path]:
+    """The album folders with this name on the backup drive, in any topic, copied to the secondary or not."""
+    return [folder for root in (config.BACKUP_DIR, config.COPIED_DIR)
+            for folder in sorted((drive / root).glob(f"*/{album}")) if folder.is_dir()]
 
 
 def missing_on_backup(source_dir: Path, dest_dir: Path) -> list[tuple[Path, Path]]:
@@ -81,7 +95,7 @@ def backup_raw(topic: str, album: str, drive: Path | None = None, dry_run: bool 
             return
     else:
         drive = wait_for_backup_drive(drive, log)
-    dest_dir = backup_dir(drive, album)
+    dest_dir = backup_dir(drive, topic, album)
 
     todo = missing_on_backup(source_dir, dest_dir)
     log(f"{len(todo)} originals in {source_dir} to back up to {dest_dir}")
@@ -127,7 +141,7 @@ class ParallelBackup:
     def __init__(self, topic: str, album: str, drive: Path | None = None, log=print,
                  progress: Progress | None = None, poll_seconds: float = 1.0,
                  on_drive: Callable[[Path], None] | None = None):
-        self.album = album
+        self.topic, self.album = topic, album
         self.source_dir = config.album_dir(topic, album)
         self.wanted_drive = drive
         self.drive: Path | None = None
@@ -174,7 +188,7 @@ class ParallelBackup:
             self.drive = wait_for_backup_drive(self.wanted_drive, self.log, stop=self._abort)
             if self.drive is None:
                 return  # import failed before the drive was connected
-            self.dest_dir = backup_dir(self.drive, self.album)
+            self.dest_dir = backup_dir(self.drive, self.topic, self.album)
             if self.on_drive:
                 self.on_drive(self.drive)
             while True:

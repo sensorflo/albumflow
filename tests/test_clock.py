@@ -1,6 +1,7 @@
 import datetime
 import random
 import subprocess
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -94,12 +95,17 @@ def make_photo(path, capture_time, model):
                     f"-CreateDate={capture_time}", f"-Model={model}", str(path)], check=True)
 
 
+def drive_root(ssd_album):
+    """The backup drive of an album folder on it: above BACKUP_DIR/<topic>/<album>."""
+    return ssd_album.parents[len(Path(config.BACKUP_DIR).parts) + 1]
+
+
 @pytest.fixture
 def album(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PICTURES_NEW", tmp_path / "new")
     monkeypatch.setattr(config, "MASTER_CAMERA", "MASTER")
     album = tmp_path / "new" / "party" / "fest"
-    ssd = tmp_path / "ssd" / config.BACKUP_DIR / "fest"
+    ssd = tmp_path / "ssd" / config.BACKUP_DIR / "party" / "fest"
     for name, t, model in [
         ("20260828T120000-_DSC0001.JPG", "2026:08:28 12:00:00", "MASTER"),  # the master's clock photo
         ("20260828T120100-_DSC0002.JPG", "2026:08:28 12:01:00", "MASTER"),
@@ -207,7 +213,7 @@ def test_import_records_cameras(tmp_path, monkeypatch):
 def test_sync_clocks_command(album, monkeypatch, capsys):
     from albumflow import cli
     album, ssd = album
-    monkeypatch.setattr(backup, "find_backup_drive", lambda drive=None: ssd.parent.parent)
+    monkeypatch.setattr(backup, "find_backup_drive", lambda drive=None: drive_root(ssd))
     monkeypatch.setattr("builtins.input", lambda: "y")
     assert cli.main(["sc", "-r", "_DSC0001=12:00:00", "-r", "_DSC0101=12:01:00", "party/fest"]) == 0
     err = capsys.readouterr().err

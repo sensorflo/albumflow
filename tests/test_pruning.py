@@ -52,8 +52,8 @@ def test_offers_other_folders_oldest_first_and_deletes(card, monkeypatch):
 def test_shows_what_is_missing_on_backup_drive(card, monkeypatch, tmp_path):
     full(monkeypatch, 0.2)
     ssd = tmp_path / "ssd"
-    (ssd / config.BACKUP_DIR / "old-fest").mkdir(parents=True)
-    (ssd / config.BACKUP_DIR / "old-fest" / "old-fest.ARW").write_bytes(b"x" * 100)
+    (ssd / config.BACKUP_DIR / "party" / "old-fest").mkdir(parents=True)
+    (ssd / config.BACKUP_DIR / "party" / "old-fest" / "old-fest.ARW").write_bytes(b"x" * 100)
     monkeypatch.setattr(backup, "find_backup_drive", lambda: ssd)
     lines = []
     cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "")
@@ -61,3 +61,15 @@ def test_shows_what_is_missing_on_backup_drive(card, monkeypatch, tmp_path):
     assert "1 of 1 files NOT on backup drive" in listed[0]  # older-fest
     assert "all on backup drive" in listed[1]  # old-fest
     assert (card / "Backup" / "older-fest").exists()  # Enter: nothing deleted
+
+
+def test_album_copied_to_secondary_counts_as_on_backup_drive(card, monkeypatch, tmp_path):
+    full(monkeypatch, 0.2)
+    ssd = tmp_path / "ssd"
+    (ssd / config.COPIED_DIR / "party" / "old-fest").mkdir(parents=True)
+    (ssd / config.COPIED_DIR / "party" / "old-fest" / "old-fest.ARW").write_bytes(b"x" * 100)
+    monkeypatch.setattr(backup, "find_backup_drive", lambda: ssd)
+    lines = []
+    cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "")
+    listed = [line for line in lines if line.startswith("  ")]
+    assert "all on backup drive" in listed[1]  # old-fest

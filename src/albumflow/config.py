@@ -19,7 +19,11 @@ CAMERA_SUFFIXES = {".arw", ".jpg", ".jpeg"}
 
 # Marker file in the root of the external backup drive
 BACKUP_MARKER = ".backup-destination"
-BACKUP_DIR = "for-backup-disc"
+# On the backup drive, an album's raw originals go to <BACKUP_DIR>\<topic>\<album>, mirroring PICTURES_NEW.
+# Once they are copied to the secondary backup drive, they move to COPIED_DIR (by hand for now; later the
+# backup tool, ~/src/backup).
+BACKUP_DIR = r"Backup\pictures-new\to-secondary"
+COPIED_DIR = r"Backup\pictures-new\copied-to-secondary"
 
 # Folder on the camera card that receives the imported (renamed) originals
 CARD_BACKUP_DIR = "Backup"

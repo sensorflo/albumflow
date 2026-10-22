@@ -285,7 +285,7 @@ def offer_pruning(card: Path, album: str, log=print, ask=input) -> None:
         if ssd is None:
             status = "backup drive not connected, can't check"
         else:
-            missing = card_import.missing_on(old, backup.backup_dir(ssd, old.path.name))
+            missing = card_import.missing_on(old, backup.backup_dirs_named(ssd, old.path.name))
             status = ("all on backup drive" if not missing
                       else f"{missing} of {len(old.files)} files NOT on backup drive")
         date = datetime.date.fromtimestamp(old.mtime)
@@ -520,7 +520,7 @@ def cmd_sync_clocks(args) -> int:
     drive = backup.find_backup_drive(_path(args.drive))
     if drive is None:
         log("The backup drive is not connected: photos are only corrected once their originals are on it.")
-    dest = backup.backup_dir(drive, args.album) if drive else None
+    dest = backup.album_backup_dir(drive, args.topic, args.album) if drive else None
 
     def confirm(question: str) -> bool:
         return display.ask(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes")
