@@ -348,6 +348,8 @@ same backup drives; they are split by data, not by drive:
   (cloud restic repo), then albumflow's plain cloud copies. To decide then:
   how it fits with `backup-all`, which runs backup-delta when
   `backup_all_includes_delta` is set.
+- To discuss: the wrapper scripts. Idea: one script, again subcommand
+  centric, instead of one script per combined step.
 - Order: (1) `albumflow update-secondary` and its wrapper (done; `backup-raw`,
   `import` and the clock correction count the originals in
   `copied-to-secondary` as on the backup too); (2) the plain cloud
