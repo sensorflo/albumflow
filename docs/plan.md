@@ -371,7 +371,7 @@ So:
   repeating the names, which would only go stale).
 - Order: (1) `update-secondary` (done; `backup-raw`, `import` and the clock
   correction count the originals in `copied-to-secondary` as on the backup
-  too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing
+  too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing (done)
   `OnlyForOthers`.
 
 ## Purging albums from the backup drives

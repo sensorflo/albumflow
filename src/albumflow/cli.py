@@ -354,6 +354,21 @@ def _age(mtime: float) -> str:
     return f"modified {datetime.date.fromtimestamp(mtime):%Y-%m-%d}"
 
 
+def album_candidates(query: str) -> list[album_choice.Album]:
+    """The albums the album commands (import, backup-raw, sync-clocks, ...) work on: not the sub-topic
+    OnlyForOthers, which holds the leftovers of finished albums (their raws are on the backup drives
+    already, under the album's own topic)."""
+    try:
+        topic, _ = album_choice.split_query(query)
+    except ValueError as e:
+        raise AlbumflowError(str(e)) from None
+    if topic and album_choice.normalize(topic) == album_choice.normalize(config.ONLY_FOR_OTHERS):
+        raise AlbumflowError(f"{config.ONLY_FOR_OTHERS} holds the leftovers of finished albums; "
+                             "importing, backing up and clock syncing don't apply to it")
+    return [a for a in album_choice.albums()
+            if album_choice.normalize(a.topic) != album_choice.normalize(config.ONLY_FOR_OTHERS)]
+
+
 def choose_album(query: str, create: bool, ask=None, out=print,
                  candidates: list[album_choice.Album] | None = None) -> tuple[str, str]:
     """Resolve a loosely typed "topic/album" to (topic, album), asking if it isn't exact.
@@ -924,7 +939,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if hasattr(args, "album_query"):
-            args.topic, args.album = choose_album(args.album_query, getattr(args, "create_album", False))
+            args.topic, args.album = choose_album(args.album_query, getattr(args, "create_album", False),
+                                                  candidates=album_candidates(args.album_query))
         return args.func(args)
     except (gphotos_api.ApiError, AlbumflowError) as e:
         print(f"Error: {e}", file=sys.stderr)

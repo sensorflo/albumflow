@@ -6,6 +6,9 @@ from pathlib import Path
 
 # Albums being worked on: <PICTURES_NEW>\<topic>\<album>
 PICTURES_NEW = Path(os.environ.get("ALBUMFLOW_PICTURES_NEW", r"C:\Users\senso\Large\Pictures\Pictures\new"))
+# A sub-topic, not a topic: <PICTURES_NEW>\<ONLY_FOR_OTHERS>\<album> holds the photos of a finished album
+# kept only for others (tagged NotForPublic/OnlyForOthers), as long as I want to spend the space.
+ONLY_FOR_OTHERS = "OnlyForOthers"
 # Finished albums: <ORIGINALS>\<topic>\<album>. restic backs them up, so the backup drives may drop them.
 ORIGINALS = Path(os.environ.get("ALBUMFLOW_ORIGINALS", r"C:\Users\senso\Large\Pictures\Originals"))
 
