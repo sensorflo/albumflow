@@ -212,16 +212,22 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
   Enter takes #1; with `-c` and no exact match, Enter creates the new album.
   No album given → the most recently modified albums.
 - Python API with a thin command line on top, so a GUI can be added later.
-- To discuss: importing when the primary backup drive is out of reach (e.g.
-  travelling without it). How to handle that gracefully? Today `import` waits
-  for the drive and `import-only` skips the backup; meanwhile the originals
-  on the card (`<card>\Backup\<album>`) are the only second copy, so pruning
-  the card must keep them (it already says what is missing on the drive),
-  and the clock correction waits. Questions: should `import` notice and offer
-  to go on without the backup, remembering that `backup-raw` is due; should
-  something remind me later of albums not yet on the drive (e.g. albums in
-  `new` missing in `to-secondary`/`copied-to-secondary`); and does the cloud
-  (`update-cloud`) need to cover such albums meanwhile, read from the laptop.
+- Importing when the primary backup drive is out of reach (done): photos
+  count as safe once they reach the secondary or the cloud; until then they
+  go to the primary and, in delta mode, the cloud.
+  - `import` without the drive asks: wait for it, or go on without the
+    backup (like `import-only`).
+  - Importing marks the album "backup pending" (`backup_pending` in its
+    `.albumflow.json`); a complete backup clears it. `import`, `backup-raw`
+    and `update-*` print one reminder line naming such albums.
+  - `albumflow backup-status`: the photos not on the backup drive (exact
+    with the drive connected, else the pending albums), and what hasn't
+    reached the secondary or the cloud.
+  - `update-cloud` also copies the photos of pending albums from the PC
+    (not the clock-corrected ones: those only exist once their original is
+    on the drive), and works without the backup drive.
+  - A full card offers to delete only old folders that reached the
+    secondary or the cloud; others only with `--force-prune`.
 
 ## Camera clock correction
 
@@ -363,7 +369,8 @@ So:
     copy `to-secondary` there, verify, move the album to
     `copied-to-secondary`)
   - the cloud: `G:\My Drive\Backup\pictures-new\<topic>\<album>`
-    (`update-cloud`: copy `to-secondary` there; never moves or deletes)
+    (`update-cloud`: copy `to-secondary` there, and albums pending a backup
+    from the PC; never moves or deletes)
   - purging (below), only by hand.
 - **Shared contract:** only the drive markers and the rule "`Backup\` on a
   drive belongs to the tools, everything else is mine". Each tool defines the
@@ -371,8 +378,8 @@ So:
   repeating the names, which would only go stale).
 - Order: (1) `update-secondary` (done; `backup-raw`, `import` and the clock
   correction count the originals in `copied-to-secondary` as on the backup
-  too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing (done)
-  `OnlyForOthers`.
+  too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing
+  `OnlyForOthers` (done).
 
 ## Purging albums from the backup drives
 

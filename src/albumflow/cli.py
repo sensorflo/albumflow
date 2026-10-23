@@ -332,7 +332,18 @@ class _BackupBar:
         return f"backup {drive_description(self.drive)}" if self.drive else "backup"
 
 
-def cmd_import(args) -> int:
+def cmd_import(args, ask=None) -> int:
+    remind_pending()
+    if not args.dry_run and backup.find_backup_drive(_path(args.drive)) is None:
+        answer = (ask or ask_key)("The backup drive is not connected: [w]ait for it, or [c]ontinue without "
+                                  "the backup? [w/c/q] ", "wcq")
+        if answer == "q":
+            raise KeyboardInterrupt
+        if answer == "c":
+            cmd_import_only(args)
+            print(f"Not backed up yet: run albumflow backup-raw \"{args.topic}/{args.album}\" once the backup "
+                  "drive is connected. Until then the photos are only on the PC and the card(s).")
+            return 0
     display = ProgressDisplay()
     bar = _BackupBar(display)
     card_import.import_and_backup(args.topic, args.album, card=_path(args.card), drive=_path(args.drive),
@@ -349,6 +360,13 @@ def cmd_import_only(args) -> int:
                             eject_cards=not args.no_eject, dry_run=args.dry_run, log=display.log,
                             card_progress=_card_bar(display), on_card_done=_pruning(args, display))
     return 0
+
+
+def remind_pending(log=print) -> None:
+    """One line naming the albums whose photos may not be on the backup drive yet."""
+    pending = backup.pending_albums()
+    if pending:
+        log(f"Backup pending: {', '.join(f'{t}/{a}' for t, a in pending)} (details: albumflow backup-status)")
 
 
 def _pruning(args, display: ProgressDisplay):
@@ -785,6 +803,7 @@ def cmd_backup(args) -> int:
         drive = backup.wait_for_backup_drive(drive, display.log)
     backup.backup_raw(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
                       progress=_BackupBar(display, drive).progress, remove_drive=not args.no_eject)
+    remind_pending(display.log)
     return 0
 
 
@@ -792,12 +811,43 @@ def cmd_update_secondary(args) -> int:
     display = ProgressDisplay()
     backup.update_secondary(dry_run=args.dry_run, log=display.log, progress=display.bar("to the secondary", last=True),
                             remove_drives=not args.no_eject)
+    remind_pending(display.log)
     return 0
 
 
 def cmd_update_cloud(args) -> int:
     display = ProgressDisplay()
     backup.update_cloud(dry_run=args.dry_run, log=display.log, progress=display.bar("to the cloud", last=True))
+    remind_pending(display.log)
+    return 0
+
+
+def cmd_backup_status(args) -> int:
+    """What isn't safe yet: photos not on the backup drive, and what hasn't reached the secondary or cloud."""
+    drive = backup.find_backup_drive()
+    print("Not on the backup drive yet:")
+    if drive is None:
+        print("  (backup drive not connected: the albums marked as pending a backup)")
+        lines = [f"  {t}/{a}" for t, a in backup.pending_albums()]
+    else:
+        lines = []
+        for album in album_candidates(""):
+            source = config.album_dir(album.topic, album.name)
+            try:
+                todo = backup.missing_on_backup(source, backup.backup_dir(drive, album.topic, album.name),
+                                                [backup.copied_dir(drive, album.topic, album.name)])
+            except AlbumflowError as e:
+                lines.append(f"  {album}: {e}")
+                continue
+            if todo:
+                size = sum(src.stat().st_size for src, _ in todo)
+                lines.append(f"  {album}: {len(todo)} photos, {size / 1e9:.1f} GB")
+    print("\n".join(lines) if lines else "  nothing")
+    print("Not yet on the secondary backup drive or in the cloud:")
+    if drive is None:
+        print("  (backup drive not connected: only the albums pending a backup, as on the PC)")
+    lines = [f"  {a.name}: {len(a.todo)} files, {a.size / 1e9:.1f} GB" for a in backup.cloud_todo(drive) if a.todo]
+    print("\n".join(lines) if lines else "  nothing")
     return 0
 
 
@@ -885,10 +935,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
 
-    p = sub.add_parser("update-cloud", help="copy the albums waiting on the backup drive to the cloud, "
-                                            f"standing in for the secondary backup drive ({config.CLOUD_PICTURES})")
+    p = sub.add_parser("update-cloud", help="copy what hasn't reached the secondary backup drive to the cloud, "
+                                            f"standing in for it ({config.CLOUD_PICTURES}): the albums waiting on "
+                                            "the backup drive, and albums pending a backup, from the PC")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_cloud)
+
+    p = sub.add_parser("backup-status", help="what isn't safe yet: photos not on the backup drive, and what "
+                                             "hasn't reached the secondary backup drive or the cloud")
+    p.set_defaults(func=cmd_backup_status)
 
     p = sub.add_parser("purge-backup", help="delete finished albums (those in Originals) from the connected "
                                             "backup drives, to make room; you choose, then confirm by typing 'delete'")

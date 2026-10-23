@@ -155,6 +155,13 @@ def test_import_and_backup(setup):
     card_import.import_and_backup("party", "fest", card=card, drive=drive, create_album=True, log=lambda *_: None)
     assert len(list(photos(tmp / "new" / "party" / "fest"))) == 2
     assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
+    assert backup.pending_albums() == [], "backed up along"
+
+
+def test_import_without_backup_marks_the_album_pending(setup):
+    card, tmp = setup
+    card_import.import_only("party", "fest", card=card, create_album=True, log=lambda *_: None)
+    assert backup.pending_albums() == [("party", "fest")]
 
 
 def test_backup_drive_connected_later(setup, monkeypatch):

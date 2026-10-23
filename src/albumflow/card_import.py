@@ -173,6 +173,8 @@ def import_card(card: Path, topic: str, album: str, create_album: bool = False, 
     counter = ByteCounter(total, progress)
     items, skipped = [], 0
     state = clock.AlbumState(album_dir)  # records each photo's camera, for the clock sync
+    state.backup_pending = True  # until a backup has copied everything
+    state.save()
     with ExifTool() as exif:
         try:
             for i, src in enumerate(sources, 1):
@@ -290,6 +292,8 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
         raise AlbumflowError(f"Import done, but the backup failed: {error}\n"
                              "The photos are safe on the PC and the card; run backup-raw again later.")
     album_dir = config.album_dir(topic, album)
+    if parallel.drive:
+        backup.set_backed_up(album_dir)
     if clock.has_measurements(album_dir):  # the originals are on the backup now
         dirs = backup.album_backup_dirs(parallel.drive, topic, album) if parallel.drive else []
         clock.apply(album_dir, dirs, log=log)

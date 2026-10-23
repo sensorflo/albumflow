@@ -68,9 +68,13 @@ class AlbumState:
         # cameras without a clock reading, treated as in sync with the master (or, for
         # the master, as showing the right time)
         self.assumed: list[str] = data.get("assume_in_sync", [])
+        # photos were imported that may not be on the backup drive yet (cleared by a complete backup)
+        self.backup_pending: bool = data.get("backup_pending", False)
 
     def save(self) -> None:
         data = {"clock": self.clock, "assume_in_sync": self.assumed, "cameras": self.cameras}
+        if self.backup_pending:
+            data["backup_pending"] = True
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.path)

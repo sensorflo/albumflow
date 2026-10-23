@@ -25,6 +25,23 @@ from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, dr
 POLL_SECONDS = 2.0  # how often to look for the backup drive
 
 
+def set_backed_up(album_dir: Path) -> None:
+    """Clear the album's "backup pending" mark: all its originals are on the backup drive now."""
+    state = clock.AlbumState(album_dir)
+    if state.backup_pending:
+        state.backup_pending = False
+        state.save()
+
+
+def pending_albums() -> list[tuple[str, str]]:
+    """(topic, album) of the albums with photos imported but maybe not yet on the backup drive."""
+    found = []
+    for state_file in sorted(config.PICTURES_NEW.glob(f"*/*/{clock.STATE_FILE}")):
+        if clock.AlbumState(state_file.parent).backup_pending:
+            found.append((state_file.parent.parent.name, state_file.parent.name))
+    return found
+
+
 def find_backup_drive(drive: Path | None = None) -> Path | None:
     """The given drive if it is connected, else the one with the marker file; None if not connected."""
     if drive is not None:
@@ -140,6 +157,7 @@ def backup_raw(topic: str, album: str, drive: Path | None = None, dry_run: bool 
         counter.start(src.name)
         copy_file(src, dest, counter.add)
     log("Backup done.")
+    set_backed_up(source_dir)
     if clock.has_measurements(source_dir):  # the originals are on the backup now
         clock.apply(source_dir, album_backup_dirs(drive, topic, album), log=log)
     if remove_drive:
@@ -270,11 +288,12 @@ def free_space(drive: Path) -> int:
 
 @dataclass
 class WaitingAlbum:
-    """An album in the backup drive's BACKUP_DIR, i.e. not yet (completely) on the secondary."""
+    """An album not yet (completely) on the secondary: in the backup drive's BACKUP_DIR, or, for the
+    cloud, also an album pending a backup, on the PC."""
     name: str  # <topic>\<album>
-    source: Path  # on the backup drive, in BACKUP_DIR
-    copied: Path  # on the backup drive, in COPIED_DIR
-    dest: Path  # on the secondary backup drive
+    source: Path  # on the backup drive, in BACKUP_DIR (or the album folder on the PC)
+    copied: Path | None  # on the backup drive, in COPIED_DIR (None for an album on the PC)
+    dest: Path  # on the secondary backup drive, or in the cloud
     todo: list[tuple[Path, Path]]  # (source, destination) of the files not yet on the secondary
 
     @property
@@ -347,7 +366,7 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
         raise AlbumflowError(f"{drive} has the markers of both the backup and the secondary backup drive")
     dest_root = secondary / config.SECONDARY_DIR
     albums = waiting_albums(drive, dest_root)
-    if _check_space(drive, albums, dest_root, free_space(secondary), log) and not dry_run:
+    if _check_space(albums, dest_root, free_space(secondary), log) and not dry_run:
         for album in _copy(albums, progress):
             move_to_copied(album)
             log(f"  {album.name}: on the secondary, moved to {config.COPIED_DIR}")
@@ -357,25 +376,48 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
 
 
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
-    """Copy the albums waiting on the backup drive to CLOUD_PICTURES, which doubles for the secondary
-    backup drive while that is out of reach. Adds files only; the backup drive stays as it is."""
+    """Copy what hasn't reached the secondary backup drive to CLOUD_PICTURES, which doubles for the
+    secondary while that is out of reach: the albums waiting on the backup drive, and the photos of albums
+    pending a backup, from the PC. Adds files only; the backup drive stays as it is."""
     drive = find_backup_drive()
-    if drive is None:
-        raise AlbumflowError(f"The backup drive (with a {config.BACKUP_MARKER} file) is not connected")
-    cloud = Path(config.CLOUD_PICTURES)
+    cloud = config.CLOUD_PICTURES
     if not Path(cloud.anchor).exists():
         raise AlbumflowError(f"The cloud drive {cloud.anchor} is not available")
-    albums = waiting_albums(drive, cloud)
-    if _check_space(drive, albums, cloud, free_space(Path(cloud.anchor)), log) and not dry_run:
+    if drive is None:
+        log("The backup drive is not connected: only the albums pending a backup are copied, from the PC.")
+    albums = cloud_todo(drive)
+    if _check_space(albums, cloud, free_space(Path(cloud.anchor)), log) and not dry_run:
         for album in _copy(albums, progress):
             log(f"  {album.name}: in the cloud")
 
 
-def _check_space(drive: Path, albums: list[WaitingAlbum], dest_root: Path, free: int, log) -> bool:
+def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
+    """What the cloud lacks of the albums waiting on the backup drive (if connected), and of the photos of
+    albums pending a backup, read from the PC."""
+    cloud = config.CLOUD_PICTURES
+    albums = waiting_albums(drive, cloud) if drive else []
+    for topic, album in pending_albums():
+        on_drive = drive / config.BACKUP_DIR / topic / album if drive else None
+        todo = []
+        for src in clock.photo_files(config.album_dir(topic, album)):
+            corrected, _ = split_name(src.name)
+            if corrected or (on_drive and (on_drive / src.name).is_file()):
+                continue  # clock-corrected only once its original is on the backup drive; or copied from there
+            target = cloud / topic / album / src.name
+            if not target.exists():
+                todo.append((src, target))
+            elif target.stat().st_size != src.stat().st_size:
+                raise AlbumflowError(f"{target} already exists with a different size than {src}")
+        albums.append(WaitingAlbum(f"{topic}\\{album} (pending a backup, from the PC)",
+                                   config.album_dir(topic, album), None, cloud / topic / album, todo))
+    return albums
+
+
+def _check_space(albums: list[WaitingAlbum], dest_root: Path, free: int, log) -> bool:
     """List what is to be copied; False if there is nothing to copy, an error if there isn't enough space."""
     total = sum(a.size for a in albums)
     if not albums:
-        log(f"No albums waiting in {drive / config.BACKUP_DIR}.")
+        log(f"Nothing to copy to {dest_root}.")
         return False
     for album in albums:
         what = f"{len(album.todo)} files, {album.size / 1e9:.1f} GB to copy" if album.todo else "already copied"

@@ -1,6 +1,6 @@
 import pytest
 
-from albumflow import backup, cli, config
+from albumflow import backup, cli, clock, config
 from albumflow.files import AlbumflowError
 
 
@@ -143,14 +143,81 @@ def test_update_cloud_refuses_without_enough_space(drives, cloud, monkeypatch):
     assert not cloud.exists()
 
 
-def test_update_cloud_needs_the_backup_drive(drives, cloud, monkeypatch):
-    monkeypatch.setattr(backup, "drives", lambda: [])
-    with pytest.raises(AlbumflowError, match="backup drive"):
-        backup.update_cloud(log=lambda *_: None)
-
-
 def test_update_cloud_cli_dry_run(drives, cloud):
     primary, _ = drives
     waiting(primary, r"party\fest", {"1.ARW": b"one"})
     assert cli.main(["update-cloud", "--dry-run"]) == 0
     assert not cloud.exists()
+
+
+def pending_album(new, name, files):
+    """An album on the PC whose photos were imported without the backup."""
+    folder = new / name
+    folder.mkdir(parents=True)
+    for file, content in files.items():
+        (folder / file).write_bytes(content)
+    state = clock.AlbumState(folder)
+    state.backup_pending = True
+    state.save()
+    return folder
+
+
+@pytest.fixture
+def new(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PICTURES_NEW", tmp_path / "new")
+    return tmp_path / "new"
+
+
+def test_update_cloud_without_the_backup_drive_copies_pending_albums_from_the_pc(drives, cloud, new,
+                                                                                 monkeypatch):
+    monkeypatch.setattr(backup, "drives", lambda: [])
+    pending_album(new, r"trip\day1", {"20261101T100000-1.ARW": b"one",
+                                      "20261101T110000-20261101T100500-2.ARW": b"corrected"})
+    (new / "trip" / "done").mkdir()
+    (new / "trip" / "done" / "x.ARW").write_bytes(b"not pending")
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud) == {r"trip\day1\20261101T100000-1.ARW": b"one"}  # corrected ones are on the drive
+
+
+def test_update_cloud_skips_pending_photos_already_waiting_on_the_drive(drives, cloud, new):
+    primary, _ = drives
+    waiting(primary, r"trip\day1", {"1.ARW": b"one"})
+    pending_album(new, r"trip\day1", {"1.ARW": b"one", "2.ARW": b"two"})
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud / "trip" / "day1") == {"1.ARW": b"one", "2.ARW": b"two"}
+
+
+def test_backup_raw_clears_the_pending_mark(drives, new):
+    folder = pending_album(new, r"trip\day1", {"1.ARW": b"one"})
+    assert backup.pending_albums() == [("trip", "day1")]
+    backup.backup_raw("trip", "day1", log=lambda *_: None)
+    assert backup.pending_albums() == []
+    assert not clock.AlbumState(folder).backup_pending
+
+
+def test_backup_status(drives, cloud, new, capsys, monkeypatch):
+    primary, _ = drives
+    pending_album(new, r"trip\day1", {"1.ARW": b"one", "2.ARW": b"two"})
+    waiting(primary, r"trip\day1", {"1.ARW": b"one"})
+    assert cli.main(["backup-status"]) == 0
+    out = capsys.readouterr().out
+    assert "trip/day1: 1 photos" in out  # 2.ARW is not on the backup drive
+    assert "trip\\day1: 1 files" in out  # 1.ARW waits on the drive, not in the cloud
+    assert "trip\\day1 (pending a backup, from the PC): 1 files" in out  # 2.ARW
+    monkeypatch.setattr(backup, "drives", lambda: [])
+    assert cli.main(["backup-status"]) == 0
+    out = capsys.readouterr().out
+    assert "backup drive not connected" in out and "  trip/day1" in out
+
+
+def test_import_offers_to_go_on_without_the_backup_drive(new, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "drives", lambda: [])
+    calls = []
+    monkeypatch.setattr(cli, "cmd_import_only", lambda args: calls.append(args))
+    args = cli.build_parser().parse_args(["import", "trip/day1"])
+    args.topic, args.album = "trip", "day1"
+    assert cli.cmd_import(args, ask=lambda prompt, keys: "c") == 0
+    assert calls == [args]
+    assert "run albumflow backup-raw \"trip/day1\"" in capsys.readouterr().out
+    with pytest.raises(KeyboardInterrupt):
+        cli.cmd_import(args, ask=lambda prompt, keys: "q")
