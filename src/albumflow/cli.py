@@ -856,7 +856,8 @@ def cmd_backup_status(args) -> int:
                 lines.append(line)
     print("\n".join(lines) if lines else "  nothing")
     if elsewhere:
-        print(f"Not yet on the secondary backup drive, but safe elsewhere (SAFE_ELSEWHERE in {config.__file__}):")
+        print("Not yet on the secondary backup drive or in the cloud, but safe elsewhere "
+              f"(SAFE_ELSEWHERE in {config.__file__}):")
         print("\n".join(elsewhere))
     return 0
 
