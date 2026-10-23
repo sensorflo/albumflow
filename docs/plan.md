@@ -313,6 +313,71 @@ To do:
 - Marker file: rename `S:\.backup-source-sd` to `.annex`, with a short
   note describing itself as content; switch `backup.py` to it too (albumflow
   accepts both names until then).
+- The annex treats every folder alike, `new\OnlyForOthers` included: it only
+  exists because C: is too small; semantically there is one home folder tree.
+
+## Responsibilities: albumflow and the backup tool
+
+Decided 2026-10-23. The backup tool (`~\src\backup`) and albumflow work on the
+same backup drives; they are split by data, not by drive:
+
+- **albumflow** owns `Backup\pictures-new` on every destination, i.e. the
+  plain copies of the raws of unfinished albums (restic excludes the raws in
+  `Pictures\new` and `new-old`):
+  - the primary drive: `to-secondary\<topic>\<album>` and
+    `copied-to-secondary\<topic>\<album>`
+  - the secondary drive: `pictures-new\<topic>\<album>`
+  - the cloud: `G:\My Drive\Backup\pictures-new\<topic>\<album>`
+
+  That is: copying the raws (`backup-raw`, done), `update-secondary` (copy
+  `to-secondary` to the secondary, verify, move the album to
+  `copied-to-secondary`), the plain cloud copies (taking over that part of
+  the backup tool's `backup-delta`; the albums are those in `to-secondary`,
+  replacing its hand-written `delta_albums`), and purging (below).
+- **backup** owns the restic repos (primary, secondary, cloud), their checks,
+  and `backup.pyz` for restores, which so never needs albumflow.
+- **Shared contract:** only the drive markers and the rule "`Backup\` on a
+  drive belongs to the tools, everything else is mine". Each tool defines the
+  markers itself; a comment says the other tool uses the same ones (without
+  repeating the names, which would only go stale).
+- **One action** when both drives are connected: `~\bin\update-secondary.cmd`
+  runs `backup update-secondary`, then, if that succeeded,
+  `albumflow update-secondary`, then safely removes both drives. Each tool
+  stays standalone; backup never calls albumflow.
+- Likewise for the cloud: a wrapper in `~\bin` runs `backup backup-delta`
+  (cloud restic repo), then albumflow's plain cloud copies. To decide then:
+  how it fits with `backup-all`, which runs backup-delta when
+  `backup_all_includes_delta` is set.
+- Order: (1) `albumflow update-secondary` and its wrapper; (2) the plain cloud
+  copies and their wrapper; (3) purging; (4) refusing `OnlyForOthers`. Each
+  step removes the backup tool's part in the same go.
+
+## Purging albums from the backup drives
+
+Both drives are always more or less full, so finished albums have to go.
+
+- An album `<topic>\<album>` may be purged from a drive only if
+  `Originals\<topic>\<album>` exists on the laptop (the album is finished,
+  restic covers what was kept).
+- Accepted loss: the drives hold the complete import, so afterwards the raws
+  in `new\OnlyForOthers\<album>` exist only on the laptop (restic excludes
+  `new`), and the culled ones nowhere.
+- Hard to do by accident, but no extra information: only an explicit purge
+  command, never part of another command, no `--yes`. It lists the finished
+  albums on the drive (largest and oldest first, with size and date); the
+  chosen ones are deleted after typing `delete`.
+
+## OnlyForOthers
+
+When an album is finished it moves from `new\<topic>\<album>` to
+`Originals\<topic>\<album>`; photos tagged NotForPublic/OnlyForOthers go to
+`new\OnlyForOthers\<album>`, kept as long as I want to spend the space; those
+edited for others go to `Originals\OnlyForOthers\<album>`.
+
+So `OnlyForOthers` is a sub-topic (the leftovers of a finished album), not a
+topic of its own. The commands that start or advance an album refuse it:
+`import`, `import-only`, `backup-raw` (its raws are on the drives already,
+under the album's topic), `sync-clocks`. The annex treats it like any folder.
 
 ## Milestones
 
@@ -333,7 +398,7 @@ To do:
 
 - Existing albums: they are not migrated or modified.
 - The workflow for finishing an album (moving folders to `Originals`, splitting
-  off `OnlyForOthers`) – to be reconsidered later.
+  off `OnlyForOthers`, see above) – to be reconsidered later.
 
 ## Open points
 
@@ -341,3 +406,14 @@ To do:
   milestone 3.
 - Exact export settings per target (sizes, quality, watermarks).
 - Details of the import step, including how renaming is done today.
+- `sync-clocks --dry-run` changes no photos, but still writes the album's
+  state file: the camera cache (fine, it is only a cache) and also readings
+  and assumptions given with `-r`, `--assume-in-sync` or `--readings-from`
+  (not fine: a later real run uses them). Proposal: in a dry run, keep the
+  latter in memory only, and say in the help "doesn't change photos or clock
+  readings".
+- Album choice only looks in `Pictures\new`. `Pictures\new-old` is
+  technically the same (albums there may never be worked on; the split is
+  only psychological), so album choice should look there too, listing those
+  albums after the ones in `new`, always with the topic (which tells e.g.
+  `party\X` and `OnlyForOthers\X` apart).
