@@ -764,6 +764,12 @@ def cmd_update_secondary(args) -> int:
     return 0
 
 
+def cmd_update_cloud(args) -> int:
+    display = ProgressDisplay()
+    backup.update_cloud(dry_run=args.dry_run, log=display.log, progress=display.bar("to the cloud", last=True))
+    return 0
+
+
 def cmd_completion(args) -> int:
     script = completion.powershell(build_parser(), ["albumflow", "af"])
     if args.output:
@@ -811,6 +817,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-eject", action="store_true", help="don't remove both backup drives when done")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
+
+    p = sub.add_parser("update-cloud", help="copy the albums waiting on the backup drive to the cloud, "
+                                            f"standing in for the secondary backup drive ({config.CLOUD_PICTURES})")
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_update_cloud)
 
     p = sub.add_parser("sync-clocks", aliases=["sc"],
                        help="record clock readings; correct photos so all cameras' photos are in order")

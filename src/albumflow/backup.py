@@ -269,14 +269,15 @@ def album_files(folder: Path) -> list[Path]:
     return sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix != ".part")
 
 
-def waiting_albums(drive: Path, secondary: Path) -> list[WaitingAlbum]:
+def waiting_albums(drive: Path, dest_root: Path) -> list[WaitingAlbum]:
+    """The albums waiting on the backup drive, with what dest_root\\<topic>\\<album> lacks of them."""
     root = drive / config.BACKUP_DIR
     albums = []
     for source in sorted(root.glob("*/*")):
         if not source.is_dir():
             continue
         relative = source.relative_to(root)
-        dest = secondary / config.SECONDARY_DIR / relative
+        dest = dest_root / relative
         todo = []
         for src in album_files(source):
             target = dest / src.relative_to(source)
@@ -326,27 +327,52 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
                              "is not connected")
     if drive == secondary:
         raise AlbumflowError(f"{drive} has the markers of both the backup and the secondary backup drive")
-    albums = waiting_albums(drive, secondary)
-    total, free = sum(a.size for a in albums), free_space(secondary)
+    dest_root = secondary / config.SECONDARY_DIR
+    albums = waiting_albums(drive, dest_root)
+    if _check_space(drive, albums, dest_root, free_space(secondary), log) and not dry_run:
+        for album in _copy(albums, progress):
+            move_to_copied(album)
+            log(f"  {album.name}: on the secondary, moved to {config.COPIED_DIR}")
+    if remove_drives and not dry_run:
+        remove_backup_drive(drive, log)
+        remove_backup_drive(secondary, log)
+
+
+def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
+    """Copy the albums waiting on the backup drive to CLOUD_PICTURES, which doubles for the secondary
+    backup drive while that is out of reach. Adds files only; the backup drive stays as it is."""
+    drive = find_backup_drive()
+    if drive is None:
+        raise AlbumflowError(f"The backup drive (with a {config.BACKUP_MARKER} file) is not connected")
+    cloud = Path(config.CLOUD_PICTURES)
+    if not Path(cloud.anchor).exists():
+        raise AlbumflowError(f"The cloud drive {cloud.anchor} is not available")
+    albums = waiting_albums(drive, cloud)
+    if _check_space(drive, albums, cloud, free_space(Path(cloud.anchor)), log) and not dry_run:
+        for album in _copy(albums, progress):
+            log(f"  {album.name}: in the cloud")
+
+
+def _check_space(drive: Path, albums: list[WaitingAlbum], dest_root: Path, free: int, log) -> bool:
+    """List what is to be copied; False if there is nothing to copy, an error if there isn't enough space."""
+    total = sum(a.size for a in albums)
     if not albums:
         log(f"No albums waiting in {drive / config.BACKUP_DIR}.")
+        return False
     for album in albums:
         what = f"{len(album.todo)} files, {album.size / 1e9:.1f} GB to copy" if album.todo else "already copied"
         log(f"  {album.name}: {what}")
-    if albums:
-        log(f"{total / 1e9:.1f} GB to copy to {secondary / config.SECONDARY_DIR}, {free / 1e9:.1f} GB free there.")
+    log(f"{total / 1e9:.1f} GB to copy to {dest_root}, {free / 1e9:.1f} GB free there.")
     if total > free:
-        raise AlbumflowError(f"Not enough space on the secondary backup drive {secondary}; "
-                             "delete albums there that are finished")
-    if dry_run:
-        return
-    counter = ByteCounter(total, progress)
+        raise AlbumflowError(f"Not enough space in {dest_root}; delete albums there that are finished")
+    return True
+
+
+def _copy(albums: list[WaitingAlbum], progress: Progress | None):
+    """Copy the albums' missing files, yielding each album once it is complete."""
+    counter = ByteCounter(sum(a.size for a in albums), progress)
     for album in albums:
         for src, dest in album.todo:
             counter.start(src.name)
             copy_file(src, dest, counter.add)
-        move_to_copied(album)
-        log(f"  {album.name}: on the secondary, moved to {config.COPIED_DIR}")
-    if remove_drives:
-        remove_backup_drive(drive, log)
-        remove_backup_drive(secondary, log)
+        yield album

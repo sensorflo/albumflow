@@ -55,7 +55,7 @@ def test_continues_an_interrupted_run(drives):
     dest.mkdir(parents=True)
     (dest / "1.ARW").write_bytes(b"one")  # copied before the interruption
     (dest / "2.ARW.part").write_bytes(b"t")  # interrupted copy
-    albums = backup.waiting_albums(primary, secondary)
+    albums = backup.waiting_albums(primary, secondary / config.SECONDARY_DIR)
     assert [src.name for src, _ in albums[0].todo] == ["2.ARW", "3.ARW"]
     backup.update_secondary(log=lambda *_: None)
     assert tree(dest) == {"1.ARW": b"one", "2.ARW": b"two", "sub\\3.ARW": b"three"}
@@ -114,3 +114,43 @@ def test_cli(drives, capsys):
     waiting(primary, r"party\fest", {"1.ARW": b"one"})
     assert cli.main(["update-secondary", "--no-eject"]) == 0
     assert (secondary / config.SECONDARY_DIR / "party" / "fest" / "1.ARW").is_file()
+
+
+@pytest.fixture
+def cloud(tmp_path, monkeypatch):
+    folder = tmp_path / "G" / "My Drive" / "Backup" / "pictures-new"
+    monkeypatch.setattr(config, "CLOUD_PICTURES", folder)
+    return folder
+
+
+def test_update_cloud_copies_the_waiting_albums_and_leaves_them_waiting(drives, cloud):
+    primary, secondary = drives
+    source = waiting(primary, r"party\fest", {"1.ARW": b"one", "1.xmp": b"x"})
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud / "party" / "fest") == {"1.ARW": b"one", "1.xmp": b"x"}  # the complete import
+    assert tree(source) == {"1.ARW": b"one", "1.xmp": b"x"}  # still waiting for the secondary
+    waiting(primary, r"party\fest", {"2.ARW": b"two"})
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud / "party" / "fest") == {"1.ARW": b"one", "1.xmp": b"x", "2.ARW": b"two"}
+
+
+def test_update_cloud_refuses_without_enough_space(drives, cloud, monkeypatch):
+    primary, _ = drives
+    waiting(primary, r"party\fest", {"1.ARW": b"one"})
+    monkeypatch.setattr(backup, "free_space", lambda drive: 2)
+    with pytest.raises(AlbumflowError, match="Not enough space"):
+        backup.update_cloud(log=lambda *_: None)
+    assert not cloud.exists()
+
+
+def test_update_cloud_needs_the_backup_drive(drives, cloud, monkeypatch):
+    monkeypatch.setattr(backup, "drives", lambda: [])
+    with pytest.raises(AlbumflowError, match="backup drive"):
+        backup.update_cloud(log=lambda *_: None)
+
+
+def test_update_cloud_cli_dry_run(drives, cloud):
+    primary, _ = drives
+    waiting(primary, r"party\fest", {"1.ARW": b"one"})
+    assert cli.main(["update-cloud", "--dry-run"]) == 0
+    assert not cloud.exists()

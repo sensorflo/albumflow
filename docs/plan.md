@@ -318,43 +318,51 @@ To do:
 
 ## Responsibilities: albumflow and the backup tool
 
-Decided 2026-10-23. The backup tool (`~\src\backup`) and albumflow work on the
-same backup drives; they are split by data, not by drive:
+Decided 2026-10-23. The background:
 
-- **albumflow** owns `Backup\pictures-new` on every destination, i.e. the
-  plain copies of the raws of unfinished albums (restic excludes the raws in
-  `Pictures\new` and `new-old`):
-  - the primary drive: `to-secondary\<topic>\<album>` and
+- Conceptually the laptop has one disk; the annex only exists because C: is
+  too small. albumflow solving that is good enough, since most of the data
+  is albums (music, with a slight stretch, too).
+- No disk is large enough to keep all raws forever (2k–5k per festival day),
+  only those I know I keep: `Originals`. The raws in `new`, `new-old` and
+  `OnlyForOthers` are kept only for a while, so restic excludes them; plain
+  copies on the backup drives cover them instead, and old albums are purged
+  there as new ones come in.
+- While the secondary drive is out of reach and the laptop and the primary
+  drive are at increased risk (holidays), the cloud doubles for the
+  secondary: a restic delta, plus plain copies of the same albums the
+  secondary lacks (the primary's `to-secondary`, i.e. the complete imports;
+  holidays mean only a few hundred photos a day).
+
+So:
+
+- **The backup tool is the overall backup.** `backup` is what I call; it
+  decides what runs when, e.g. the delta while `backup_all_includes_delta` is
+  set in its settings, and owns the restic repos (primary, secondary, cloud),
+  their checks, and `backup.pyz` for restores, which never needs albumflow.
+  For the album raws it runs albumflow's CLI: `backup update-secondary` runs
+  `albumflow update-secondary`, `backup backup-delta` runs
+  `albumflow update-cloud`. A missing or failing albumflow makes the backup
+  fail, never skipped silently. albumflow never calls backup. No wrapper
+  scripts.
+- **albumflow** owns `Backup\pictures-new` on every destination, and all
+  knowledge about albums:
+  - the primary drive: `to-secondary\<topic>\<album>` (`backup-raw`) and
     `copied-to-secondary\<topic>\<album>`
-  - the secondary drive: `pictures-new\<topic>\<album>`
+  - the secondary drive: `pictures-new\<topic>\<album>` (`update-secondary`:
+    copy `to-secondary` there, verify, move the album to
+    `copied-to-secondary`)
   - the cloud: `G:\My Drive\Backup\pictures-new\<topic>\<album>`
-
-  That is: copying the raws (`backup-raw`, done), `update-secondary` (copy
-  `to-secondary` to the secondary, verify, move the album to
-  `copied-to-secondary`), the plain cloud copies (taking over that part of
-  the backup tool's `backup-delta`; the albums are those in `to-secondary`,
-  replacing its hand-written `delta_albums`), and purging (below).
-- **backup** owns the restic repos (primary, secondary, cloud), their checks,
-  and `backup.pyz` for restores, which so never needs albumflow.
+    (`update-cloud`: copy `to-secondary` there; never moves or deletes)
+  - purging (below), only by hand.
 - **Shared contract:** only the drive markers and the rule "`Backup\` on a
   drive belongs to the tools, everything else is mine". Each tool defines the
   markers itself; a comment says the other tool uses the same ones (without
   repeating the names, which would only go stale).
-- **One action** when both drives are connected: `~\bin\update-secondary.cmd`
-  runs `backup update-secondary`, then, if that succeeded,
-  `albumflow update-secondary`, then safely removes both drives. Each tool
-  stays standalone; backup never calls albumflow.
-- Likewise for the cloud: a wrapper in `~\bin` runs `backup backup-delta`
-  (cloud restic repo), then albumflow's plain cloud copies. To decide then:
-  how it fits with `backup-all`, which runs backup-delta when
-  `backup_all_includes_delta` is set.
-- To discuss: the wrapper scripts. Idea: one script, again subcommand
-  centric, instead of one script per combined step.
-- Order: (1) `albumflow update-secondary` and its wrapper (done; `backup-raw`,
-  `import` and the clock correction count the originals in
-  `copied-to-secondary` as on the backup too); (2) the plain cloud
-  copies and their wrapper; (3) purging; (4) refusing `OnlyForOthers`. Each
-  step removes the backup tool's part in the same go.
+- Order: (1) `update-secondary` (done; `backup-raw`, `import` and the clock
+  correction count the originals in `copied-to-secondary` as on the backup
+  too); (2) `update-cloud`, run by backup (done); (3) purging; (4) refusing
+  `OnlyForOthers`.
 
 ## Purging albums from the backup drives
 
