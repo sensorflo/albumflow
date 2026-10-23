@@ -2,18 +2,21 @@
 
 Only adds files, never deletes or overwrites: photos culled on the PC later
 stay on the backup. update-secondary only moves files on the backup drive,
-once they are on the secondary.
+once they are on the secondary. Only purging deletes: finished albums, chosen
+by hand.
 """
 
 from __future__ import annotations
 
+import math
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from albumflow import config
+from albumflow import annex, config
 from albumflow import clock
 from albumflow.clock import split_name
 from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
@@ -376,3 +379,54 @@ def _copy(albums: list[WaitingAlbum], progress: Progress | None):
             counter.start(src.name)
             copy_file(src, dest, counter.add)
         yield album
+
+
+# --- purging finished albums from the backup drives, to make room ---
+
+@dataclass
+class Purgeable:
+    """A finished album on a backup drive: it is in ORIGINALS, which restic covers."""
+    name: str  # <topic>\<album>
+    folder: Path
+    size: int
+    newest: float  # modification time of its newest file
+    score: float  # size, weighted by age, like the annex suggestions
+
+
+def purge_roots() -> list[tuple[str, Path]]:
+    """(description, folder of <topic>\\<album>) of the connected backup drives' album trees that may be
+    purged: on the backup drive only what is on the secondary too, on the secondary everything."""
+    roots = []
+    drive, secondary = find_backup_drive(), find_secondary_drive()
+    if drive:
+        roots.append((f"the backup drive {drive}", drive / config.COPIED_DIR))
+    if secondary:
+        roots.append((f"the secondary backup drive {secondary}", secondary / config.SECONDARY_DIR))
+    return roots
+
+
+def is_finished(topic: str, album: str) -> bool:
+    """Whether the album is in ORIGINALS, also if moved to the annex."""
+    folder = config.ORIGINALS / topic / album
+    return folder.is_dir() or annex.link_of(folder).exists()
+
+
+def purgeable(root: Path, now: float | None = None) -> list[Purgeable]:
+    """The finished albums below root, highest score first."""
+    now = time.time() if now is None else now
+    found = []
+    for folder in sorted(root.glob("*/*")):
+        if not folder.is_dir() or annex.is_link(folder) or not is_finished(folder.parent.name, folder.name):
+            continue
+        files = [p.stat() for p in folder.rglob("*") if p.is_file()]
+        size, newest = sum(s.st_size for s in files), max((s.st_mtime for s in files), default=0.0)
+        age = max(0.0, (now - newest) / 86400)
+        score = size / 1e9 * (1 - math.exp(-age / config.ANNEX_AGE_DAYS))
+        found.append(Purgeable(str(folder.relative_to(root)), folder, size, newest, score))
+    return sorted(found, key=lambda p: p.score, reverse=True)
+
+
+def purge(album: Purgeable, root: Path) -> None:
+    annex.delete_tree(album.folder, root)
+    if not any(album.folder.parent.iterdir()):
+        album.folder.parent.rmdir()  # the topic folder

@@ -212,6 +212,16 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
   Enter takes #1; with `-c` and no exact match, Enter creates the new album.
   No album given → the most recently modified albums.
 - Python API with a thin command line on top, so a GUI can be added later.
+- To discuss: importing when the primary backup drive is out of reach (e.g.
+  travelling without it). How to handle that gracefully? Today `import` waits
+  for the drive and `import-only` skips the backup; meanwhile the originals
+  on the card (`<card>\Backup\<album>`) are the only second copy, so pruning
+  the card must keep them (it already says what is missing on the drive),
+  and the clock correction waits. Questions: should `import` notice and offer
+  to go on without the backup, remembering that `backup-raw` is due; should
+  something remind me later of albums not yet on the drive (e.g. albums in
+  `new` missing in `to-secondary`/`copied-to-secondary`); and does the cloud
+  (`update-cloud`) need to cover such albums meanwhile, read from the laptop.
 
 ## Camera clock correction
 
@@ -361,7 +371,7 @@ So:
   repeating the names, which would only go stale).
 - Order: (1) `update-secondary` (done; `backup-raw`, `import` and the clock
   correction count the originals in `copied-to-secondary` as on the backup
-  too); (2) `update-cloud`, run by backup (done); (3) purging; (4) refusing
+  too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing
   `OnlyForOthers`.
 
 ## Purging albums from the backup drives
@@ -378,6 +388,11 @@ Both drives are always more or less full, so finished albums have to go.
   command, never part of another command, no `--yes`. It lists the finished
   albums on the drive (largest and oldest first, with size and date); the
   chosen ones are deleted after typing `delete`.
+- Done: `albumflow purge-backup`, for each connected drive in turn. On the
+  primary only `copied-to-secondary` is offered (what waits in
+  `to-secondary` must reach the secondary first), on the secondary all of
+  `pictures-new`. Order: size weighted by age, as for the annex. An album in
+  `Originals` that is in the annex counts as finished too.
 
 ## OnlyForOthers
 

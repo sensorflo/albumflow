@@ -6,6 +6,8 @@ from pathlib import Path
 
 # Albums being worked on: <PICTURES_NEW>\<topic>\<album>
 PICTURES_NEW = Path(os.environ.get("ALBUMFLOW_PICTURES_NEW", r"C:\Users\senso\Large\Pictures\Pictures\new"))
+# Finished albums: <ORIGINALS>\<topic>\<album>. restic backs them up, so the backup drives may drop them.
+ORIGINALS = Path(os.environ.get("ALBUMFLOW_ORIGINALS", r"C:\Users\senso\Large\Pictures\Originals"))
 
 # Album folders matching any of these (re.search on the folder name, ignoring case) are never
 # offered as import / backup targets.

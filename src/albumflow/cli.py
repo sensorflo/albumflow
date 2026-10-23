@@ -770,6 +770,39 @@ def cmd_update_cloud(args) -> int:
     return 0
 
 
+def cmd_purge_backup(args, ask=input) -> int:
+    roots = backup.purge_roots()
+    if not roots:
+        raise AlbumflowError("Neither backup drive is connected")
+    for description, root in roots:
+        candidates = backup.purgeable(root)
+        usage = shutil.disk_usage(root.anchor)
+        print(f"\nFinished albums (in {config.ORIGINALS}) on {description} "
+              f"({usage.free / 1e9:.0f} GB, {usage.free / usage.total:.0%} free):")
+        if not candidates:
+            print("  none")
+            continue
+        print(f"{'':>2} {'GB':>4}  {'idle':<9}  album")
+        for i, c in enumerate(candidates, 1):
+            print(f"{i:>2} {c.size / 1e9:4.0f}  {ago(c.newest):<9}  {c.name}")
+        answer = ask("Delete which? (e.g. 1 3 or 1-4; Enter: none): ")
+        selection = parse_selection(answer, len(candidates))
+        if selection is None:
+            print(f"Not understood: {answer!r}; nothing deleted.")
+            continue
+        if not selection:
+            continue
+        chosen = [candidates[i - 1] for i in selection]
+        size = sum(c.size for c in chosen)
+        if ask(f"Type delete to delete {len(chosen)} albums ({size / 1e9:.0f} GB) from {description}: ").strip() != "delete":
+            print("Nothing deleted.")
+            continue
+        for c in chosen:
+            backup.purge(c, root)
+            print(f"  deleted {c.name}")
+    return 0
+
+
 def cmd_completion(args) -> int:
     script = completion.powershell(build_parser(), ["albumflow", "af"])
     if args.output:
@@ -822,6 +855,10 @@ def build_parser() -> argparse.ArgumentParser:
                                             f"standing in for the secondary backup drive ({config.CLOUD_PICTURES})")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_cloud)
+
+    p = sub.add_parser("purge-backup", help="delete finished albums (those in Originals) from the connected "
+                                            "backup drives, to make room; you choose, then confirm by typing 'delete'")
+    p.set_defaults(func=cmd_purge_backup)
 
     p = sub.add_parser("sync-clocks", aliases=["sc"],
                        help="record clock readings; correct photos so all cameras' photos are in order")
