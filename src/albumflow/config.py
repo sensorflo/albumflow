@@ -17,13 +17,16 @@ EXCLUDED_ALBUM_PATTERNS = [
 # Files imported from the camera card
 CAMERA_SUFFIXES = {".arw", ".jpg", ".jpeg"}
 
-# Marker file in the root of the external backup drive
+# Marker files in the root of the (primary) backup drive and of the secondary one. The backup tool
+# (~/src/backup) uses the same markers; it owns the restic repos on these drives, albumflow the album raws.
 BACKUP_MARKER = ".backup-destination"
+SECONDARY_BACKUP_MARKER = ".secondary-backup-destination"
 # On the backup drive, an album's raw originals go to <BACKUP_DIR>\<topic>\<album>, mirroring PICTURES_NEW.
-# Once they are copied to the secondary backup drive, they move to COPIED_DIR (by hand for now; later the
-# backup tool, ~/src/backup).
+# update-secondary copies them to <SECONDARY_DIR>\<topic>\<album> on the secondary backup drive, then moves
+# them on the backup drive to COPIED_DIR.
 BACKUP_DIR = r"Backup\pictures-new\to-secondary"
 COPIED_DIR = r"Backup\pictures-new\copied-to-secondary"
+SECONDARY_DIR = r"Backup\pictures-new"
 
 # Folder on the camera card that receives the imported (renamed) originals
 CARD_BACKUP_DIR = "Backup"

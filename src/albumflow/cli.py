@@ -520,12 +520,12 @@ def cmd_sync_clocks(args) -> int:
     drive = backup.find_backup_drive(_path(args.drive))
     if drive is None:
         log("The backup drive is not connected: photos are only corrected once their originals are on it.")
-    dest = backup.album_backup_dir(drive, args.topic, args.album) if drive else None
+    dirs = backup.album_backup_dirs(drive, args.topic, args.album) if drive else []
 
     def confirm(question: str) -> bool:
         return display.ask(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes")
 
-    clock.apply(album_dir, dest, log=log, confirm=confirm, dry_run=args.dry_run)
+    clock.apply(album_dir, dirs, log=log, confirm=confirm, dry_run=args.dry_run)
     return 0
 
 
@@ -757,6 +757,13 @@ def cmd_backup(args) -> int:
     return 0
 
 
+def cmd_update_secondary(args) -> int:
+    display = ProgressDisplay()
+    backup.update_secondary(dry_run=args.dry_run, log=display.log, progress=display.bar("to the secondary", last=True),
+                            remove_drives=not args.no_eject)
+    return 0
+
+
 def cmd_completion(args) -> int:
     script = completion.powershell(build_parser(), ["albumflow", "af"])
     if args.output:
@@ -798,6 +805,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("backup-raw", aliases=["br"], help="copy an album's raw originals to the backup drive")
     album_args(p, drive=True)
     p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("update-secondary",
+                       help="copy the albums waiting on the backup drive to the secondary backup drive")
+    p.add_argument("--no-eject", action="store_true", help="don't remove both backup drives when done")
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_update_secondary)
 
     p = sub.add_parser("sync-clocks", aliases=["sc"],
                        help="record clock readings; correct photos so all cameras' photos are in order")

@@ -1,18 +1,30 @@
+import pytest
+
 from albumflow import backup, card_import, config
+from albumflow.files import AlbumflowError
 
 
 def test_backup_dir_mirrors_topic_and_album(tmp_path):
     assert backup.backup_dir(tmp_path, "party", "fest") == tmp_path / "Backup" / "pictures-new" / "to-secondary" / "party" / "fest"
 
 
-def test_album_backup_dir_prefers_to_secondary(tmp_path):
-    waiting = tmp_path / config.BACKUP_DIR / "party" / "fest"
-    copied = tmp_path / config.COPIED_DIR / "party" / "fest"
-    assert backup.album_backup_dir(tmp_path, "party", "fest") == waiting  # neither exists yet
-    copied.mkdir(parents=True)
-    assert backup.album_backup_dir(tmp_path, "party", "fest") == copied
-    waiting.mkdir(parents=True)  # more photos backed up after the copy to the secondary
-    assert backup.album_backup_dir(tmp_path, "party", "fest") == waiting
+def test_album_backup_dirs_are_waiting_and_copied(tmp_path):
+    assert backup.album_backup_dirs(tmp_path, "party", "fest") == [
+        tmp_path / config.BACKUP_DIR / "party" / "fest", tmp_path / config.COPIED_DIR / "party" / "fest"]
+
+
+def test_missing_on_backup_counts_what_was_copied_to_the_secondary(tmp_path):
+    album, waiting, copied = tmp_path / "album", tmp_path / "waiting", tmp_path / "copied"
+    for folder in (album, waiting, copied):
+        folder.mkdir()
+    for name in ("1.ARW", "2.ARW", "3.ARW"):
+        (album / name).write_bytes(b"x")
+    (copied / "1.ARW").write_bytes(b"x")  # moved on by update-secondary
+    (waiting / "2.ARW").write_bytes(b"x")
+    assert backup.missing_on_backup(album, waiting, [copied]) == [(album / "3.ARW", waiting / "3.ARW")]
+    (copied / "3.ARW").write_bytes(b"xx")
+    with pytest.raises(AlbumflowError, match="different size"):
+        backup.missing_on_backup(album, waiting, [copied])
 
 
 def test_backup_dirs_named_finds_album_in_any_topic_and_state(tmp_path):

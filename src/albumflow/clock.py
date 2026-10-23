@@ -288,14 +288,14 @@ def cameras_without_reading(album_dir: Path, shots: list[Shot], state: AlbumStat
     return [f"{model(c)} ({counts[c]} photos)" if counts.get(c) else c for c in unknown]
 
 
-def apply(album_dir: Path, backup_dir: Path | None, log=print, confirm=None, dry_run: bool = False,
+def apply(album_dir: Path, backup_dirs: list[Path], log=print, confirm=None, dry_run: bool = False,
           progress=None) -> int:
     """Correct the photos that need it and whose originals are on the backup. Returns how many.
 
     Only when every camera of the album has a clock reading (or is assumed in
-    sync); until then the corrections are paused. backup_dir is the album's
-    folder on the backup drive (None: not connected, so nothing can be
-    corrected yet). confirm(text) -> bool may veto.
+    sync); until then the corrections are paused. backup_dirs are the folders
+    on the backup drive that may hold the album's originals (none: not
+    connected, so nothing can be corrected yet). confirm(text) -> bool may veto.
     """
     state = AlbumState(album_dir)
     if not (state.clock or state.assumed):
@@ -312,8 +312,8 @@ def apply(album_dir: Path, backup_dir: Path | None, log=print, confirm=None, dry
         if not todo:
             log("Clock correction: all photos are in order.")
             return 0
-        ready = [s for s in todo if backup_dir is not None
-                 and all((backup_dir / split_name(f.name)[1]).is_file() for f in s.files)]
+        ready = [s for s in todo
+                 if all(any((d / split_name(f.name)[1]).is_file() for d in backup_dirs) for f in s.files)]
         waiting = len(todo) - len(ready)
         by_camera: dict[str, int] = {}
         for shot in ready:

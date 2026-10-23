@@ -125,7 +125,7 @@ def test_measure_and_apply(album):
         clock.measure(album, album / "20260828T120000-_DSC0001.JPG", datetime.time(12, 0, 0), exif)
         camera, offset = clock.measure(album, album / "20260828T120305-_DSC0101.JPG", datetime.time(12, 1, 0), exif)
     assert (camera, offset) == ("OTHER", 125)  # 2:05 ahead of the clock, and of the master
-    assert clock.apply(album, ssd, log=lambda *_: None) == 1
+    assert clock.apply(album, [ssd], log=lambda *_: None) == 1
 
     corrected = album / "20260828T115955-20260828T120200-_DSC0102.JPG"
     assert corrected.exists() and not (album / "20260828T120200-_DSC0102.JPG").exists()
@@ -138,7 +138,7 @@ def test_measure_and_apply(album):
     assert (ssd / "20260828T120200-_DSC0102.JPG").exists()  # the original on the backup is untouched
 
     # repeating changes nothing; the backup sees the corrected photo as backed up
-    assert clock.apply(album, ssd, log=lambda *_: None) == 0
+    assert clock.apply(album, [ssd], log=lambda *_: None) == 0
     assert backup.missing_on_backup(album, ssd) == []
 
 
@@ -149,7 +149,7 @@ def test_waits_until_original_is_on_backup(album):
         clock.measure(album, album / "20260828T120000-_DSC0001.JPG", datetime.time(12, 0, 0), exif)
         clock.measure(album, album / "20260828T120305-_DSC0101.JPG", datetime.time(12, 1, 0), exif)
     lines = []
-    assert clock.apply(album, ssd, log=lines.append) == 0
+    assert clock.apply(album, [ssd], log=lines.append) == 0
     assert any("1 photos wait" in line for line in lines)
     assert (album / "20260828T120200-_DSC0102.JPG").exists()
 
@@ -159,7 +159,7 @@ def test_nothing_without_master_measurement(album):
     with ExifTool() as exif:
         clock.measure(album, album / "20260828T120305-_DSC0101.JPG", datetime.time(12, 1, 0), exif)
     lines = []
-    assert clock.apply(album, ssd, log=lines.append) == 0
+    assert clock.apply(album, [ssd], log=lines.append) == 0
     assert any(line.startswith("Clock correction paused") and "MASTER (2 photos)" in line for line in lines)
 
 
@@ -168,7 +168,7 @@ def test_reimport_skips_photo_corrected_since(album, tmp_path):
     with ExifTool() as exif:
         clock.measure(album, album / "20260828T120000-_DSC0001.JPG", datetime.time(12, 0, 0), exif)
         clock.measure(album, album / "20260828T120305-_DSC0101.JPG", datetime.time(12, 1, 0), exif)
-    clock.apply(album, ssd, log=lambda *_: None)
+    clock.apply(album, [ssd], log=lambda *_: None)
     card = tmp_path / "card"
     make_photo(card / "DCIM" / "100MSDCF" / "_DSC0102.JPG", "2026:08:28 12:02:00", "OTHER")
     card_import.import_only("party", "fest", card=card, log=lambda *_: None)
@@ -187,7 +187,7 @@ def test_new_camera_without_reading_pauses_corrections(album):
     with ExifTool() as exif:
         readings(album, exif, ("20260828T120000-_DSC0001.JPG", "12:00:00"), ("20260828T120305-_DSC0101.JPG", "12:01:00"))
     lines = []
-    assert clock.apply(album, ssd, log=lines.append) == 0
+    assert clock.apply(album, [ssd], log=lines.append) == 0
     assert any("paused" in line and "THIRD (1 photos)" in line for line in lines)
     assert any('sync-clocks -r' in line and '"party/fest"' in line for line in lines)
 
@@ -196,7 +196,7 @@ def test_new_camera_without_reading_pauses_corrections(album):
     state.save()
     # _DSC0102 (master time 11:59:55), and now also the other camera's clock photo
     # _DSC0101 (camera 12:03:05, master 12:01:00), which came after THIRD's 12:02:30
-    assert clock.apply(album, ssd, log=lambda *_: None) == 2
+    assert clock.apply(album, [ssd], log=lambda *_: None) == 2
 
 
 def test_import_records_cameras(tmp_path, monkeypatch):

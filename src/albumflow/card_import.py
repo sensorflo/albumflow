@@ -291,7 +291,8 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
                              "The photos are safe on the PC and the card; run backup-raw again later.")
     album_dir = config.album_dir(topic, album)
     if clock.has_measurements(album_dir):  # the originals are on the backup now
-        clock.apply(album_dir, parallel.dest_dir, log=log)
+        dirs = backup.album_backup_dirs(parallel.drive, topic, album) if parallel.drive else []
+        clock.apply(album_dir, dirs, log=log)
     if remove_drive and parallel.drive:
         backup.remove_backup_drive(parallel.drive, log)
     return items
