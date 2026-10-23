@@ -385,10 +385,21 @@ def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = N
         raise AlbumflowError(f"The cloud drive {cloud.anchor} is not available")
     if drive is None:
         log("The backup drive is not connected: only the albums pending a backup are copied, from the PC.")
-    albums = cloud_todo(drive)
+    albums = []
+    for album in cloud_todo(drive):
+        if where := safe_elsewhere(album):
+            log(f"  {album.name}: skipped, safe elsewhere ({where})")
+        else:
+            albums.append(album)
     if _check_space(albums, cloud, free_space(Path(cloud.anchor)), log) and not dry_run:
         for album in _copy(albums, progress):
             log(f"  {album.name}: in the cloud")
+
+
+def safe_elsewhere(album: WaitingAlbum) -> str | None:
+    """Where the album is safe though not on the secondary (config.SAFE_ELSEWHERE), for an album of
+    cloud_todo; None if it isn't."""
+    return config.SAFE_ELSEWHERE.get(str(album.dest.relative_to(config.CLOUD_PICTURES)))
 
 
 def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:

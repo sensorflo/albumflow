@@ -846,7 +846,12 @@ def cmd_backup_status(args) -> int:
     print("Not yet on the secondary backup drive or in the cloud:")
     if drive is None:
         print("  (backup drive not connected: only the albums pending a backup, as on the PC)")
-    lines = [f"  {a.name}: {len(a.todo)} files, {a.size / 1e9:.1f} GB" for a in backup.cloud_todo(drive) if a.todo]
+    lines = []
+    for album in backup.cloud_todo(drive):
+        if album.todo:
+            where = backup.safe_elsewhere(album)
+            lines.append(f"  {album.name}: {len(album.todo)} files, {album.size / 1e9:.1f} GB"
+                         + (f" (safe elsewhere: {where})" if where else ""))
     print("\n".join(lines) if lines else "  nothing")
     return 0
 

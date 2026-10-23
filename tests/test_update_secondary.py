@@ -221,3 +221,17 @@ def test_import_offers_to_go_on_without_the_backup_drive(new, monkeypatch, capsy
     assert "run albumflow backup-raw \"trip/day1\"" in capsys.readouterr().out
     with pytest.raises(KeyboardInterrupt):
         cli.cmd_import(args, ask=lambda prompt, keys: "q")
+
+
+def test_update_cloud_skips_albums_safe_elsewhere(drives, cloud, monkeypatch, capsys):
+    primary, _ = drives
+    waiting(primary, r"party\fest", {"1.ARW": b"one"})
+    waiting(primary, r"party\other", {"1.ARW": b"one"})
+    monkeypatch.setattr(config, "SAFE_ELSEWHERE", {r"party\fest": "SD card at home"})
+    lines = []
+    backup.update_cloud(log=lines.append)
+    assert tree(cloud) == {r"party\other\1.ARW": b"one"}
+    assert r"  party\fest: skipped, safe elsewhere (SD card at home)" in lines
+    waiting(primary, r"party\fest", {"2.ARW": b"two"})
+    assert cli.main(["backup-status"]) == 0
+    assert r"party\fest: 2 files, 0.0 GB (safe elsewhere: SD card at home)" in capsys.readouterr().out

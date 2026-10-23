@@ -35,6 +35,68 @@ SECONDARY_DIR = r"Backup\pictures-new"
 # While the secondary backup drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))
+# Albums not on the secondary backup drive yet, but safe elsewhere: update-cloud doesn't copy them to the
+# cloud, backup-status names where they are. <topic>\<album> -> where. Remove an entry once the album is
+# on the secondary (from then on it doesn't matter anyway). Card pruning ignores this: it may be the very
+# card named here.
+SAFE_ELSEWHERE = {
+    R"party\Pan Tau Okt 2026": "SD card at home",
+    # Albums from before albumflow, backed up to the primary on 2026-10-23
+    R"hollidays\Borm TU Event 21": "SD card A1 I",
+    R"hollidays\Borm TU Event 22": "SD card A1 I",
+    R"hollidays\Bormday Sommer 21": "SD card A1 I",
+    R"hollidays\Comersee Aug 2021 Handyphotos": "SD card A1 I",
+    R"hollidays\Italien Frühling 2025": "SD card A1 I",
+    R"hollidays\Maennerreisli Wallis 25": "SD card A1 I",
+    R"hollidays\Mannereisli Domi 50 Gitschital 2026": "SD card A1 I",
+    R"hollidays\Misox Shankra 2023": "SD card A1 I",
+    R"hollidays\Ozora rundherum 2024": "SD card A1 I",
+    R"hollidays\Rhäzüns Aug 2020": "SD card A1 I",
+    R"hollidays\Savoie Sept 2020 Sonjas Cam": "SD card A1 I",
+    R"hollidays\Suedfrankreich Nov 2025": "SD card A1 I",
+    R"hollidays\Suedfrankreich Sommer 2021": "SD card A1 I",
+    R"hollidays\Sueditalien Juni 2021 Handyphotos": "SD card A1 I",
+    R"hollidays\Suedostasien 2022 Handyphotos": "SD card A1 I",
+    R"hollidays\Ägypten Sommer 2021": "SD card A1 I",
+    R"misc my life\Maert Uerzlikon Ok 22": "SD card A1 I",
+    R"misc my life\Unsorted": "SD card A1 I",
+    R"outdoor\Ausflug Brunnen Gersau Sep 2023": "SD card A1 I",
+    R"outdoor\Baldeggersee March 2024": "SD card A1 I",
+    R"outdoor\Chiemen Okt 23": "SD card A1 I",
+    R"outdoor\Hedinger Weiher Eisbaden Feb 2026": "SD card A1 I",
+    R"outdoor\Ibergeregg Maerz 2026": "SD card A1 I",
+    R"outdoor\Reha Wald April 2023": "SD card A1 I",
+    R"outdoor\Seleger Moor March 2024": "SD card A1 I",
+    R"outdoor\Wäggital April 2025": "SD card A1 I",
+    R"party\Alpine Gathering 23 Handyphotos": "SD card A1 I",
+    R"party\Alpine Gathering 24 Handyphotos": "SD card A1 I",
+    R"party\Back2Life Aug 21": "SD card A1 I",
+    R"party\Baile Leon II 2026": "SD card A1 I",
+    R"party\Burgklang 2025": "SD card A1 I",
+    R"party\Burning Mountain 2023 OnlyForMe": "SD card A1 I",
+    R"party\Circus of love 2025": "SD card A1 I",
+    R"party\Evolution 2022 Handyphotos": "SD card A1 I",
+    R"party\Freunde am Tanzen Sep 23 (Baden)": "SD card A1 I",
+    R"party\Göle Traufer Letzigrund 22": "SD card A1 I",
+    R"party\Hai in den Mai 24 Handyphotos": "SD card A1 I",
+    R"party\Hochzeit": "SD card A1 I",
+    R"party\Indian Spirit 2022 Handyphotos": "SD card A1 I",
+    R"party\Mountain Calling 21 2023 rundherum": "SD card A1 I",
+    R"party\Neujahr 2023-2024": "SD card A1 I",
+    R"party\Outdoor Selection 2025": "SD card A1 I",
+    R"party\Secret Castle 2026": "SD card A1 I",
+    R"party\Shankra 2022 Handyphotos": "SD card A1 I",
+    R"party\Streetparade 2026": "SD card A1 I",
+    R"party\Tribe of us Sep 22": "SD card A1 I",
+    R"party\USA Erinnerung 2023": "SD card A1 I",
+    R"party\Zugermesse 2024": "SD card A1 I",
+    R"places\Derendingen": "SD card A1 I",
+    R"places\Mettmenstetten": "SD card A1 I",
+    R"places\Mikas": "SD card A1 I",
+    R"places\Solothurn": "SD card A1 I",
+    R"places\Wilen": "SD card A1 I",
+    R"places\Zug": "SD card A1 I",
+}
 
 # Folder on the camera card that receives the imported (renamed) originals
 CARD_BACKUP_DIR = "Backup"
