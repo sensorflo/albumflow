@@ -266,8 +266,12 @@ def parse_selection(answer: str, count: int) -> list[int] | None:
     return sorted(chosen)
 
 
-def offer_pruning(card: Path, album: str, log=print, ask=input) -> None:
-    """If the card is fuller than allowed, offer to delete old folders in its Backup folder."""
+def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = False) -> None:
+    """If the card is fuller than allowed, offer to delete old folders in its Backup folder.
+
+    A folder is only deleted once it is safe, i.e. all its files are on the secondary backup drive or in
+    the cloud (see backup.safe_dirs_named); with force, also before.
+    """
     free = card_import.free_fraction(card)
     if free >= config.CARD_MIN_FREE:
         return
@@ -277,17 +281,24 @@ def offer_pruning(card: Path, album: str, log=print, ask=input) -> None:
         return
     try:
         ssd = backup.find_backup_drive()
-    except AlbumflowError:
-        ssd = None
+        safe_dirs = {old.path.name: backup.safe_dirs_named(old.path.name) for old in olds}
+    except AlbumflowError as e:
+        log(f"Warning: {e}")
+        ssd, safe_dirs = None, {old.path.name: [] for old in olds}
     log(f"{card} has only {free:.0%} free (less than {config.CARD_MIN_FREE:.0%}). "
         f"Old backups on the card, oldest first:")
+    unsafe = set()
     for i, old in enumerate(olds, 1):
-        if ssd is None:
-            status = "backup drive not connected, can't check"
+        missing = card_import.missing_on(old, safe_dirs[old.path.name])
+        if not missing:
+            status = "safe: on the secondary or in the cloud"
         else:
-            missing = card_import.missing_on(old, backup.backup_dirs_named(ssd, old.path.name))
-            status = ("all on backup drive" if not missing
-                      else f"{missing} of {len(old.files)} files NOT on backup drive")
+            unsafe.add(i)
+            status = f"{missing} of {len(old.files)} files not yet on the secondary or in the cloud"
+            if ssd is None:
+                status += "; backup drive not connected"
+            elif not_on_drive := card_import.missing_on(old, backup.backup_dirs_named(ssd, old.path.name)):
+                status += f", {not_on_drive} not even on the backup drive"
         date = datetime.date.fromtimestamp(old.mtime)
         log(f"  {i}  {date:%Y-%m-%d}  {old.size / 1e9:6.1f} GB  {old.path.name}  ({status})")
     answer = ask("Delete which? (e.g. 1 2 or 1-3; Enter: none): ")
@@ -295,10 +306,15 @@ def offer_pruning(card: Path, album: str, log=print, ask=input) -> None:
     if selection is None:
         log(f"Not understood: {answer!r}; nothing deleted.")
         return
+    deleted = False
     for i in selection:
+        if i in unsafe and not force:
+            log(f"Not deleted {olds[i - 1].path}: not yet safe (--force-prune deletes it anyway)")
+            continue
         shutil.rmtree(olds[i - 1].path)
         log(f"Deleted {olds[i - 1].path}")
-    if selection:
+        deleted = True
+    if deleted:
         log(f"{card} now has {card_import.free_fraction(card):.0%} free.")
 
 
@@ -336,7 +352,7 @@ def cmd_import_only(args) -> int:
 
 
 def _pruning(args, display: ProgressDisplay):
-    return lambda card: offer_pruning(card, args.album, log=display.log, ask=display.ask)
+    return lambda card: offer_pruning(card, args.album, log=display.log, ask=display.ask, force=args.force_prune)
 
 
 def _path(value: str | None) -> Path | None:
@@ -841,6 +857,9 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--card", help="card drive, e.g. E:\\ (default: every inserted card, one after the other; waits for one)")
             p.add_argument("-c", "--create-album", action="store_true",
                            help="create the album folder if it doesn't exist yet")
+            p.add_argument("--force-prune", action="store_true",
+                           help="when a full card offers to delete old backups on it, also delete those not "
+                                "yet on the secondary backup drive or in the cloud")
         if drive:
             p.add_argument("--drive", help=f"backup drive (default: the one with a {config.BACKUP_MARKER} file)")
         what = " and ".join(w for w, used in (("cards", card), ("the backup drive", drive)) if used)

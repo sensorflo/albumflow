@@ -70,6 +70,21 @@ def backup_dirs_named(drive: Path, album: str) -> list[Path]:
             for folder in sorted((drive / root).glob(f"*/{album}")) if folder.is_dir()]
 
 
+def safe_dirs_named(album: str) -> list[Path]:
+    """The folders with this album name, in any topic, whose files count as safe: those on the secondary
+    backup drive (also those moved to COPIED_DIR on the backup drive, which happens only once they are on the
+    secondary) and those in the cloud. Only what is connected is looked at."""
+    roots = []
+    drive, secondary = find_backup_drive(), find_secondary_drive()
+    if drive:
+        roots.append(drive / config.COPIED_DIR)
+    if secondary:
+        roots.append(secondary / config.SECONDARY_DIR)
+    if config.CLOUD_PICTURES.is_dir():
+        roots.append(config.CLOUD_PICTURES)
+    return [folder for root in roots for folder in sorted(root.glob(f"*/{album}")) if folder.is_dir()]
+
+
 def on_backup(dirs: list[Path], name: str) -> Path | None:
     """The file name in the first of dirs that has it, None if none has."""
     return next((d / name for d in dirs if (d / name).is_file()), None)
