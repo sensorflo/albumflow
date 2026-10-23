@@ -451,3 +451,12 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
   only psychological), so album choice should look there too, listing those
   albums after the ones in `new`, always with the topic (which tells e.g.
   `party\X` and `OnlyForOthers\X` apart).
+- SD cards: for consistency, the card's root `Backup` folder should have the
+  same tree as everywhere else, `Backup\<topic>\<album>`, not just
+  `Backup\<album>` as the import writes it now. Affects the import, card
+  pruning (`old_backups`, matching by name), and the existing card folders.
+- The primary knows what reached the secondary only as long as albums stay
+  in `copied-to-secondary` while unfinished: `purge-backup` only offers
+  finished albums, but a folder deleted there by hand (or an album copied to
+  the secondary by hand, as before albumflow) leaves no trace, and
+  `backup-status` then reports its photos as not on the backup drive.
