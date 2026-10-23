@@ -234,4 +234,5 @@ def test_update_cloud_skips_albums_safe_elsewhere(drives, cloud, monkeypatch, ca
     assert r"  party\fest: skipped, safe elsewhere (SD card at home)" in lines
     waiting(primary, r"party\fest", {"2.ARW": b"two"})
     assert cli.main(["backup-status"]) == 0
-    assert r"party\fest: 2 files, 0.0 GB (safe elsewhere: SD card at home)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "but safe elsewhere" in out and "  party\\fest: 2 files, 0.0 GB (SD card at home)" in out
