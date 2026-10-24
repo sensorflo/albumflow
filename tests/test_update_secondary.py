@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from albumflow import backup, cli, clock, config
+from albumflow import annex, backup, cli, clock, config
 from albumflow.files import AlbumflowError
 
 
@@ -165,6 +167,7 @@ def pending_album(new, name, files):
 @pytest.fixture
 def new(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PICTURES_NEW", tmp_path / "new")
+    monkeypatch.setattr(config, "PICTURES_NEW_OLD", tmp_path / "new-old")
     return tmp_path / "new"
 
 
@@ -273,3 +276,69 @@ def test_update_secondary_keeps_a_cloud_file_of_another_size(drives, cloud):
     (cloud / "party" / "fest" / "1.ARW").write_bytes(b"different")
     backup.update_secondary(log=lambda *_: None)
     assert tree(cloud) == {r"party\fest\1.ARW": b"different"}
+
+
+def culled(new, name, kept):
+    """The album on the PC, holding only the kept photos (the others were rejected)."""
+    folder = new / name
+    folder.mkdir(parents=True, exist_ok=True)
+    for file in kept:
+        (folder / file).write_bytes(b"k")
+    return folder
+
+
+def space(monkeypatch, free):
+    monkeypatch.setattr(config, "CLOUD_RESERVE", 10)
+    monkeypatch.setattr(backup, "free_space", lambda drive: free + 10)
+
+
+def test_update_cloud_with_enough_space_copies_rejected_photos_too(drives, cloud, new, monkeypatch):
+    primary, _ = drives
+    waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222"})
+    culled(new, r"trip\day1", ["1.ARW"])
+    space(monkeypatch, 8)
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\day1\2.ARW": b"2222"}
+
+
+def test_update_cloud_short_on_space_deletes_rejected_and_copies_kept_first(drives, cloud, new, monkeypatch):
+    primary, _ = drives
+    waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222"})
+    waiting(primary, r"trip\day2", {"3.ARW": b"3333", "4.ARW": b"4444"})
+    culled(new, r"trip\day1", ["1.ARW"])
+    culled(new, r"trip\day2", ["20261102T100500-3.ARW"])  # kept, and clock-corrected on the PC
+    (cloud / "trip" / "day1").mkdir(parents=True)
+    (cloud / "trip" / "day1" / "2.ARW").write_bytes(b"2222")  # rejected since copied
+    (cloud / "trip" / "old").mkdir(parents=True)
+    (cloud / "trip" / "old" / "x.ARW").write_bytes(b"xx")  # album no longer on the PC: kept
+    space(monkeypatch, 8)  # the kept photos need 8, 4 more would be needed for 4.ARW
+    lines = []
+    backup.update_cloud(log=lines.append)
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\day2\3.ARW": b"3333", r"trip\old\x.ARW": b"xx"}
+    assert r"Deleting from the cloud, rejected: trip\day1, 1 files, 0.0 GB" in lines
+    assert "1 rejected photos are not copied to the cloud: not enough room." in lines
+
+
+def test_update_cloud_never_deletes_kept_photos(drives, cloud, new, monkeypatch):
+    primary, _ = drives
+    waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222"})
+    culled(new, r"trip\day1", ["1.ARW", "2.ARW"])
+    (cloud / "trip" / "day0").mkdir(parents=True)
+    (cloud / "trip" / "day0" / "0.ARW").write_bytes(b"0")
+    culled(new, r"trip\day0", ["0.ARW"])
+    space(monkeypatch, 7)
+    with pytest.raises(AlbumflowError, match="the kept photos need"):
+        backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud) == {r"trip\day0\0.ARW": b"0"}
+
+
+def test_kept_names_also_in_new_old_and_the_annex(new, tmp_path):
+    culled(config.PICTURES_NEW_OLD, r"trip\old", ["1.ARW"])
+    target = tmp_path / "annex" / "day1"
+    target.mkdir(parents=True)
+    (target / "2.ARW").write_bytes(b"k")
+    (new / "trip").mkdir(parents=True)
+    annex.create_link(annex.link_of(new / "trip" / "day1"), target)
+    assert backup.kept_names(Path(r"trip\old")) == {"1.ARW"}
+    assert backup.kept_names(Path(r"trip\day1")) == {"2.ARW"}
+    assert backup.kept_names(Path(r"trip\renamed")) is None

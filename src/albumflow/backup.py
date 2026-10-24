@@ -412,22 +412,81 @@ def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> lis
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
     """Copy what hasn't reached the secondary backup drive to CLOUD_PICTURES, which doubles for the
     secondary while that is out of reach: the albums waiting on the backup drive, and the photos of albums
-    pending a backup, from the PC. Adds files only; the backup drive stays as it is."""
+    pending a backup, from the PC. The backup drive stays as it is.
+
+    Kept photos (still in the new tree) come first. When space is short (CLOUD_RESERVE is always left free),
+    rejected photos (no longer in the new tree) are deleted from the cloud, and copied only if there is room.
+    """
     drive = find_backup_drive()
     cloud = config.CLOUD_PICTURES
     if not Path(cloud.anchor).exists():
         raise AlbumflowError(f"The cloud drive {cloud.anchor} is not available")
     if drive is None:
         log("The backup drive is not connected: only the albums pending a backup are copied, from the PC.")
-    albums = []
+    kept, rejected = [], []  # (source, destination)
     for album in cloud_todo(drive):
         if where := safe_elsewhere(album):
             log(f"  {album.name}: skipped, safe elsewhere ({where})")
-        else:
-            albums.append(album)
-    if _check_space(albums, cloud, free_space(Path(cloud.anchor)), log) and not dry_run:
-        for album in _copy(albums, progress):
-            log(f"  {album.name}: in the cloud")
+            continue
+        names = kept_names(album.dest.relative_to(cloud))
+        for src, dest in album.todo:
+            (kept if names is None or split_name(src.name)[1] in names else rejected).append((src, dest))
+        if album.todo:
+            log(f"  {album.name}: {len(album.todo)} files, {album.size / 1e9:.1f} GB to copy")
+    kept_size, rejected_size = (sum(src.stat().st_size for src, _ in files) for files in (kept, rejected))
+    free = free_space(Path(cloud.anchor)) - config.CLOUD_RESERVE
+    log(f"{(kept_size + rejected_size) / 1e9:.1f} GB to copy to {cloud} ({rejected_size / 1e9:.1f} GB of it "
+        f"rejected photos), {free / 1e9:.1f} GB free there (keeping {config.CLOUD_RESERVE / 1e9:.0f} GB free).")
+    if not kept and not rejected:
+        return
+    room = free - kept_size  # for rejected photos: not what deleting rejected ones frees, which would only churn
+    if kept_size + rejected_size > free:
+        deletable = rejected_in_cloud()
+        deletable_size = sum(p.stat().st_size for p in deletable)
+        if kept_size > free + deletable_size:
+            raise AlbumflowError(f"Not enough space in {cloud}: the kept photos need {kept_size / 1e9:.1f} GB, "
+                                 f"{(free + deletable_size) / 1e9:.1f} GB could be made free by deleting the "
+                                 "rejected ones there")
+        delete_from_cloud(deletable, "rejected", dry_run, log)
+    fitting = []
+    for src, dest in rejected:
+        if src.stat().st_size <= room:
+            fitting.append((src, dest))
+            room -= src.stat().st_size
+    if len(fitting) < len(rejected):
+        log(f"{len(rejected) - len(fitting)} rejected photos are not copied to the cloud: not enough room.")
+    if not dry_run:
+        _copy_files(kept + fitting, progress)
+        log(f"Copied {len(kept) + len(fitting)} files to the cloud.")
+
+
+def kept_names(album: Path) -> set[str] | None:
+    """The import names of the photos of album (<topic>\\<album>) still in the new tree, in new or new-old,
+    also when in the annex; None if the album isn't found there (e.g. renamed): then all count as kept."""
+    for root in (config.PICTURES_NEW, config.PICTURES_NEW_OLD):
+        for folder in (root / album, annex.link_of(root / album)):
+            if folder.is_dir():
+                return {split_name(p.name)[1] for p in clock.photo_files(folder)}
+    return None
+
+
+def rejected_in_cloud() -> list[Path]:
+    """The photos in the cloud that are no longer in the new tree (in albums found there)."""
+    cloud = config.CLOUD_PICTURES
+    found = []
+    for folder in sorted(cloud.glob("*/*")) if cloud.is_dir() else []:
+        names = kept_names(folder.relative_to(cloud))
+        if names is not None:
+            found += [p for p in sorted(folder.iterdir())
+                      if p.is_file() and p.suffix != ".part" and split_name(p.name)[1] not in names]
+    return found
+
+
+def _copy_files(files: list[tuple[Path, Path]], progress: Progress | None) -> None:
+    counter = ByteCounter(sum(src.stat().st_size for src, _ in files), progress)
+    for src, dest in files:
+        counter.start(src.name)
+        copy_file(src, dest, counter.add)
 
 
 def safe_elsewhere(album: WaitingAlbum) -> str | None:

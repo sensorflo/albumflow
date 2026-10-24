@@ -6,6 +6,8 @@ from pathlib import Path
 
 # Albums being worked on: <PICTURES_NEW>\<topic>\<album>
 PICTURES_NEW = Path(os.environ.get("ALBUMFLOW_PICTURES_NEW", r"C:\Users\senso\Large\Pictures\Pictures\new"))
+# Albums just as unfinished, which I may never find time for (the split is only psychological)
+PICTURES_NEW_OLD = PICTURES_NEW.parent / "new-old"
 # A sub-topic, not a topic: <PICTURES_NEW>\<ONLY_FOR_OTHERS>\<album> holds the photos of a finished album
 # kept only for others (tagged NotForPublic/OnlyForOthers), as long as I want to spend the space.
 ONLY_FOR_OTHERS = "OnlyForOthers"
@@ -35,6 +37,8 @@ SECONDARY_DIR = r"Backup\pictures-new"
 # While the secondary backup drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))
+# update-cloud always leaves this much free in the cloud, for its other uses
+CLOUD_RESERVE = 2 * 10**9
 # Albums not on the secondary backup drive yet, but safe elsewhere: update-cloud doesn't copy them to the
 # cloud, backup-status names where they are. <topic>\<album> -> where. Remove an entry once the album is
 # on the secondary (from then on it doesn't matter anyway). Card pruning ignores this: it may be the very
