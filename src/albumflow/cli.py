@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -927,11 +928,24 @@ def cmd_completion(args) -> int:
     return 0
 
 
+class _HelpFormatter(argparse.HelpFormatter):
+    """Lists the commands directly, without a line for <command> above them (as git and pip do)."""
+
+    def _format_action(self, action):
+        if isinstance(action, argparse._SubParsersAction):
+            return "".join(self._format_action(a) for a in action._get_subactions())
+        return super()._format_action(action)
+
+    def _split_lines(self, text, width):
+        # Wrap at spaces only, so names like backup-files aren't split at their hyphen
+        return textwrap.wrap(" ".join(text.split()), width, break_on_hyphens=False)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="albumflow",
+    parser = argparse.ArgumentParser(prog="albumflow", formatter_class=_HelpFormatter,
                                      epilog="albumflow <command> -h shows the options of a command.")
     parser._positionals.title = "commands"  # instead of "positional arguments", listed before the options
-    sub = parser.add_subparsers(dest="command", metavar="<command>", required=True, help="one of the following")
+    sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
 
     def album_args(p, card=False, drive=False):
         p.add_argument("album_query", metavar="topic/album", nargs="?", default="",
