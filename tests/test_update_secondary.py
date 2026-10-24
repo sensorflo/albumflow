@@ -249,3 +249,27 @@ def test_backup_new_all(drives, new, capsys):
     assert not (primary / config.BACKUP_DIR / "OnlyForOthers").exists()
     assert "1 albums with originals not yet on the backup drive: trip/day1" in capsys.readouterr().err
     assert cli.main(["backup-new", "--all", "trip/day1"]) == 2
+
+
+def test_update_secondary_deletes_from_the_cloud_what_is_on_the_secondary(drives, cloud):
+    primary, secondary = drives
+    waiting(primary, r"party\fest", {"20261101T100000-_DSC1.ARW": b"one", "2.ARW": b"two"})
+    backup.update_cloud(log=lambda *_: None)
+    # an old copy from the PC, clock-corrected
+    (cloud / "party" / "fest" / "20261101T100500-20261101T100000-_DSC1.ARW").write_bytes(b"corrected")
+    (cloud / "trip" / "open").mkdir(parents=True)
+    (cloud / "trip" / "open" / "3.ARW").write_bytes(b"three")  # not on the secondary
+    lines = []
+    backup.update_secondary(log=lines.append)
+    assert not (cloud / "party").exists()
+    assert tree(cloud) == {r"trip\open\3.ARW": b"three"}
+    assert r"Deleting from the cloud, on the secondary now: party\fest, 3 files, 0.0 GB" in lines
+
+
+def test_update_secondary_keeps_a_cloud_file_of_another_size(drives, cloud):
+    primary, secondary = drives
+    waiting(primary, r"party\fest", {"1.ARW": b"one"})
+    (cloud / "party" / "fest").mkdir(parents=True)
+    (cloud / "party" / "fest" / "1.ARW").write_bytes(b"different")
+    backup.update_secondary(log=lambda *_: None)
+    assert tree(cloud) == {r"party\fest\1.ARW": b"different"}

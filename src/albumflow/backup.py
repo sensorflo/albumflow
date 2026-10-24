@@ -368,10 +368,46 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
         for album in _copy(albums, progress):
             move_to_copied(album)
             log(f"  {album.name}: on the secondary, moved to {config.COPIED_DIR}")
+    # The cloud only stands in for the secondary: what is on the secondary now goes from there
+    delete_from_cloud(cloud_files_on(dest_root), "on the secondary now", dry_run, log)
     if remove_drives and not dry_run:
         remove_backup_drive(drive, log)
         remove_backup_drive(secondary, log)
 
+
+def cloud_files_on(root: Path) -> list[Path]:
+    """The files in the cloud whose photo is also below root (<topic>\\<album>\\<name>): with the same name
+    and size, or, for a clock-corrected copy (<master time>-<import name>), its original by import name."""
+    cloud = config.CLOUD_PICTURES
+    found = []
+    for path in sorted(cloud.rglob("*")) if cloud.is_dir() else []:
+        if not path.is_file() or path.suffix == ".part":
+            continue
+        corrected, import_name = split_name(path.name)
+        other = root / path.parent.relative_to(cloud) / import_name
+        if other.is_file() and (corrected or other.stat().st_size == path.stat().st_size):
+            found.append(path)
+    return found
+
+
+def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> list[Path]:
+    """Delete the files from the cloud (one line per album), and folders left empty. Returns the deleted."""
+    cloud = config.CLOUD_PICTURES
+    by_album: dict[Path, list[Path]] = {}
+    for path in files:
+        by_album.setdefault(path.parent, []).append(path)
+    for folder, paths in by_album.items():
+        size = sum(p.stat().st_size for p in paths)
+        verb = "Would delete" if dry_run else "Deleting"
+        log(f"{verb} from the cloud, {reason}: {folder.relative_to(cloud)}, {len(paths)} files, {size / 1e9:.1f} GB")
+        if dry_run:
+            continue
+        for path in paths:
+            path.unlink()
+        for empty in (folder, folder.parent):
+            if empty != cloud and empty.is_dir() and not any(empty.iterdir()):
+                empty.rmdir()
+    return [] if dry_run else files
 
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
     """Copy what hasn't reached the secondary backup drive to CLOUD_PICTURES, which doubles for the
