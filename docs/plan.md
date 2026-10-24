@@ -477,3 +477,6 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
   finished albums, but a folder deleted there by hand (or an album copied to
   the secondary by hand, as before albumflow) leaves no trace, and
   `backup-status` then reports its photos as not on the backup drive.
+- Finishing an album (moving it to `Originals`) should also drain its
+  rejected photos on C: (`Rejected\<topic>\<album>`) to the annex, then
+  remove the C: folder, leaving only the annex part.
