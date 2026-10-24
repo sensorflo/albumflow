@@ -131,7 +131,7 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = ()) -
     return todo
 
 
-def backup_raw(topic: str, album: str, drive: Path | None = None, dry_run: bool = False,
+def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool = False,
                log=print, progress: Progress | None = None, remove_drive: bool = False) -> None:
     """Copy the album's originals missing on the backup drive; with remove_drive, remove it at the end."""
     source_dir = config.album_dir(topic, album)
@@ -343,7 +343,7 @@ def move_to_copied(album: WaitingAlbum) -> None:
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             src.replace(target)
-    for part in album.source.rglob("*.part"):  # incomplete copies; backup-raw copies those files again
+    for part in album.source.rglob("*.part"):  # incomplete copies; backup-new copies those files again
         part.unlink()
     for folder in sorted((p for p in album.source.rglob("*") if p.is_dir()), reverse=True):
         folder.rmdir()

@@ -192,17 +192,17 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
   A photo leaves `DCIM` only once a complete copy is on the PC. Re-running after
   an interruption is safe: a photo already on the PC with identical content is
   just moved on the card; different content stops the import.
-- **`albumflow backup-raw <topic>/<album>`** (`br`) – separate, since the
+- **`albumflow backup-new <topic>/<album>`** (`bn`) – separate, since the
   SSD isn't always connected. Copies the album folder from the PC to
   `<drive>:\for-backup-disc\<album>\` on the drive with a `.backup-destination`
   file in its root. Only adds files, never deletes or overwrites, so photos
   culled later stay backed up. At the end, the backup drive is safely removed
   (like "Safely Remove Hardware"; `--no-eject` keeps it), also after `import`.
-- **`albumflow import <topic>/<album>`** (`i`) – `import-only` with `backup-raw`
+- **`albumflow import <topic>/<album>`** (`i`) – `import-only` with `backup-new`
   running in parallel: a background thread repeatedly backs up whatever is on
   the PC but not yet on the SSD, until the last card is done. The SSD may be
   connected later: the backup starts when it appears, and at the end albumflow
-  waits for it (`backup-raw` alone waits too). If the backup fails,
+  waits for it (`backup-new` alone waits too). If the backup fails,
   the import goes on and the backup error is reported at the end. Two progress
   bars; the backup total also counts photos still on the current card.
 - `<topic>/<album>` (or `\`) may be abbreviated or misspelled: an exact match
@@ -218,7 +218,7 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
   - `import` without the drive asks: wait for it, or go on without the
     backup (like `import-only`).
   - Importing marks the album "backup pending" (`backup_pending` in its
-    `.albumflow.json`); a complete backup clears it. `import`, `backup-raw`
+    `.albumflow.json`); a complete backup clears it. `import`, `backup-new`
     and `update-*` print one reminder line naming such albums.
   - `albumflow backup-status`: the photos not on the backup drive (exact
     with the drive connected, else the pending albums), and what hasn't
@@ -264,8 +264,8 @@ taken. Exact time doesn't matter.
   sidecars (`.xmp`) follow. Correcting again replaces the prefix.
 - A photo is only corrected once its original is on the backup SSD, which
   keeps the originals (import name and content), as does the card's Backup
-  folder. `backup-raw` treats `<t>-X` as backed up if the SSD has `X`.
-- Once an album has clock readings, `import` and `backup-raw` apply them after
+  folder. `backup-new` treats `<t>-X` as backed up if the SSD has `X`.
+- Once an album has clock readings, `import` and `backup-new` apply them after
   the backup, so later imports end up as if corrected afterwards.
 
 Later:
@@ -298,7 +298,7 @@ room, not speed, hence the name.
   continues an interrupted move. Junctions are only removed with `os.rmdir`;
   recursive deletes refuse to go through a junction. Refused while editors
   (Lightroom, darktable, ...) run, or without enough free space.
-- `import`, `backup-raw` and `sync-clocks` don't offer albums in the annex.
+- `import`, `backup-new` and `sync-clocks` don't offer albums in the annex.
 - `to-annex` without a folder suggests what to move: candidates are the folders
   below `ANNEX_SUGGEST_ROOTS` that directly contain files (with everything
   below them); score = size in GB × (1 − e^(−age/180 days)), age = since the
@@ -353,17 +353,22 @@ Decided 2026-10-23. The background:
 So:
 
 - **The backup tool is the overall backup.** `backup` is what I call; it
-  decides what runs when, e.g. the delta while `backup_all_includes_delta` is
-  set in its settings, and owns the restic repos (primary, secondary, cloud),
-  their checks, and `backup.pyz` for restores, which never needs albumflow.
-  For the album raws it runs albumflow's CLI: `backup update-secondary` runs
-  `albumflow update-secondary`, `backup backup-delta` runs
-  `albumflow update-cloud`. A missing or failing albumflow makes the backup
-  fail, never skipped silently. albumflow never calls backup. No wrapper
-  scripts.
+  decides what runs when, e.g. the cloud update while
+  `backup_all_includes_update_cloud` is set in its settings (holidays, or
+  whenever the laptop is at high risk), and owns the restic repos (primary,
+  secondary, cloud), their checks, and `backup.pyz` for restores, which never
+  needs albumflow. For the album raws it runs albumflow's CLI:
+  `backup backup-all` runs `albumflow backup-new --all`, and
+  `backup update-secondary` / `update-cloud` run albumflow's subcommands of
+  the same name. A missing or failing albumflow makes the backup fail, never
+  skipped silently. albumflow never calls backup. No wrapper scripts.
+- **Names, the same in both tools:** `backup-<what>` copies a kind of data
+  from the laptop to the primary (backup: `backup-files`, `backup-vcs`;
+  albumflow: `backup-new`, the raws of the new tree); `update-<destination>`
+  passes on what the primary has (`update-secondary`, `update-cloud`).
 - **albumflow** owns `Backup\pictures-new` on every destination, and all
   knowledge about albums:
-  - the primary drive: `to-secondary\<topic>\<album>` (`backup-raw`) and
+  - the primary drive: `to-secondary\<topic>\<album>` (`backup-new`) and
     `copied-to-secondary\<topic>\<album>`
   - the secondary drive: `pictures-new\<topic>\<album>` (`update-secondary`:
     copy `to-secondary` there, verify, move the album to
@@ -376,7 +381,7 @@ So:
   drive belongs to the tools, everything else is mine". Each tool defines the
   markers itself; a comment says the other tool uses the same ones (without
   repeating the names, which would only go stale).
-- Order: (1) `update-secondary` (done; `backup-raw`, `import` and the clock
+- Order: (1) `update-secondary` (done; `backup-new`, `import` and the clock
   correction count the originals in `copied-to-secondary` as on the backup
   too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing
   `OnlyForOthers` (done).
@@ -410,7 +415,7 @@ edited for others go to `Originals\OnlyForOthers\<album>`.
 
 So `OnlyForOthers` is a sub-topic (the leftovers of a finished album), not a
 topic of its own. The commands that start or advance an album refuse it:
-`import`, `import-only`, `backup-raw` (its raws are on the drives already,
+`import`, `import-only`, `backup-new` (its raws are on the drives already,
 under the album's topic), `sync-clocks`. The annex treats it like any folder.
 
 ## Milestones

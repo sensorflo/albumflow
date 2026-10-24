@@ -341,7 +341,7 @@ def cmd_import(args, ask=None) -> int:
             raise KeyboardInterrupt
         if answer == "c":
             cmd_import_only(args)
-            print(f"Not backed up yet: run albumflow backup-raw \"{args.topic}/{args.album}\" once the backup "
+            print(f"Not backed up yet: run albumflow backup-new \"{args.topic}/{args.album}\" once the backup "
                   "drive is connected. Until then the photos are only on the PC and the card(s).")
             return 0
     display = ProgressDisplay()
@@ -389,7 +389,7 @@ def _age(mtime: float) -> str:
 
 
 def album_candidates(query: str) -> list[album_choice.Album]:
-    """The albums the album commands (import, backup-raw, sync-clocks, ...) work on: not the sub-topic
+    """The albums the album commands (import, backup-new, sync-clocks, ...) work on: not the sub-topic
     OnlyForOthers, which holds the leftovers of finished albums (their raws are on the backup drives
     already, under the album's own topic)."""
     try:
@@ -796,14 +796,14 @@ def cmd_annex_status(args) -> int:
     return 1
 
 
-def cmd_backup(args) -> int:
+def cmd_backup_new(args) -> int:
     display = ProgressDisplay()
     drive = _path(args.drive)
     if not args.dry_run:
         drive = backup.wait_for_backup_drive(drive, display.log)
     progress = _BackupBar(display, drive).progress
     if not args.all:
-        backup.backup_raw(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
+        backup.backup_new(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
                           progress=progress, remove_drive=not args.no_eject)
         remind_pending(display.log)
         return 0
@@ -821,7 +821,7 @@ def cmd_backup(args) -> int:
                 + (": " + ", ".join(map(str, albums)) if albums else "."))
     for album in albums:
         display.log(f"{album}:")
-        backup.backup_raw(album.topic, album.name, drive=drive, dry_run=args.dry_run, log=display.log,
+        backup.backup_new(album.topic, album.name, drive=drive, dry_run=args.dry_run, log=display.log,
                           progress=progress)
     if not args.no_eject and not args.dry_run:
         backup.remove_backup_drive(drive, display.log)
@@ -950,7 +950,7 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--no-eject", action="store_true", help=f"don't eject {what} when done")
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
 
-    p = sub.add_parser("import", aliases=["i"], help="import-only, then backup-raw")
+    p = sub.add_parser("import", aliases=["i"], help="import-only, then backup-new")
     album_args(p, card=True, drive=True)
     p.set_defaults(func=cmd_import)
 
@@ -958,11 +958,12 @@ def build_parser() -> argparse.ArgumentParser:
     album_args(p, card=True)
     p.set_defaults(func=cmd_import_only)
 
-    p = sub.add_parser("backup-raw", aliases=["br"], help="copy an album's raw originals to the backup drive")
+    p = sub.add_parser("backup-new", aliases=["bn"],
+                       help="copy an album's raw originals (in the new tree) to the backup drive")
     album_args(p, drive=True)
     p.add_argument("--all", action="store_true",
                    help="instead of one album: every album with originals not yet on the backup drive")
-    p.set_defaults(func=cmd_backup)
+    p.set_defaults(func=cmd_backup_new)
 
     p = sub.add_parser("update-secondary",
                        help="copy the albums waiting on the backup drive to the secondary backup drive")

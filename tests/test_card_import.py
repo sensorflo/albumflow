@@ -96,12 +96,12 @@ def test_backup_only_adds(setup):
     card_import.import_only("party", "fest", card=card, create_album=True, log=lambda *_: None)
     drive = tmp / "ssd"
     drive.mkdir()
-    backup.backup_raw("party", "fest", drive=drive, log=lambda *_: None)
+    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None)
 
     pc = tmp / "new" / "party" / "fest"
     culled = sorted(photos(pc))[0]
     culled.unlink()
-    backup.backup_raw("party", "fest", drive=drive, log=lambda *_: None)
+    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None)
     assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
 
 
@@ -330,16 +330,16 @@ def test_each_card_gets_its_own_progress(setup, monkeypatch):
     assert list(calls) == [card1, card2]
 
 
-def test_backup_raw_removes_drive_only_when_asked(setup, monkeypatch):
+def test_backup_new_removes_drive_only_when_asked(setup, monkeypatch):
     card, tmp = setup
     card_import.import_only("party", "fest", card=card, create_album=True, log=lambda *_: None)
     drive = tmp / "ssd"
     drive.mkdir()
     removed = []
     monkeypatch.setattr(backup, "remove_device", removed.append)
-    backup.backup_raw("party", "fest", drive=drive, log=lambda *_: None)
+    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None)
     assert removed == []
-    backup.backup_raw("party", "fest", drive=drive, log=lambda *_: None, remove_drive=True)
+    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None, remove_drive=True)
     assert removed == [Path(drive.anchor)]
 
 

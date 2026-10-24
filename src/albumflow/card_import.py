@@ -261,7 +261,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
                       backup_progress: Progress | None = None, remove_drive: bool = False,
                       on_backup_drive: Callable[[Path], None] | None = None,
                       on_card_done: Callable[[Path], None] | None = None) -> list[ImportItem]:
-    """import_only, with backup_raw running in parallel.
+    """import_only, with backup_new running in parallel.
 
     The backup drive may be connected later; the backup starts when it appears,
     and at the end this waits for it if needed. If the backup fails midway, the
@@ -270,7 +270,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
     if dry_run:
         items = import_only(topic, album, card=card, create_album=create_album, dry_run=True, log=log)
         if config.album_dir(topic, album).is_dir():
-            backup.backup_raw(topic, album, drive=drive, dry_run=True, log=log)
+            backup.backup_new(topic, album, drive=drive, dry_run=True, log=log)
         log("All photos would be backed up in parallel to the import")
         return items
 
@@ -290,7 +290,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
     error = parallel.finish()
     if error:
         raise AlbumflowError(f"Import done, but the backup failed: {error}\n"
-                             "The photos are safe on the PC and the card; run backup-raw again later.")
+                             "The photos are safe on the PC and the card; run backup-new again later.")
     album_dir = config.album_dir(topic, album)
     if parallel.drive:
         backup.set_backed_up(album_dir)

@@ -187,10 +187,10 @@ def test_update_cloud_skips_pending_photos_already_waiting_on_the_drive(drives, 
     assert tree(cloud / "trip" / "day1") == {"1.ARW": b"one", "2.ARW": b"two"}
 
 
-def test_backup_raw_clears_the_pending_mark(drives, new):
+def test_backup_new_clears_the_pending_mark(drives, new):
     folder = pending_album(new, r"trip\day1", {"1.ARW": b"one"})
     assert backup.pending_albums() == [("trip", "day1")]
-    backup.backup_raw("trip", "day1", log=lambda *_: None)
+    backup.backup_new("trip", "day1", log=lambda *_: None)
     assert backup.pending_albums() == []
     assert not clock.AlbumState(folder).backup_pending
 
@@ -218,7 +218,7 @@ def test_import_offers_to_go_on_without_the_backup_drive(new, monkeypatch, capsy
     args.topic, args.album = "trip", "day1"
     assert cli.cmd_import(args, ask=lambda prompt, keys: "c") == 0
     assert calls == [args]
-    assert "run albumflow backup-raw \"trip/day1\"" in capsys.readouterr().out
+    assert "run albumflow backup-new \"trip/day1\"" in capsys.readouterr().out
     with pytest.raises(KeyboardInterrupt):
         cli.cmd_import(args, ask=lambda prompt, keys: "q")
 
@@ -238,14 +238,14 @@ def test_update_cloud_skips_albums_safe_elsewhere(drives, cloud, monkeypatch, ca
     assert "but safe elsewhere" in out and "  party\\fest: 2 files, 0.0 GB (SD card at home)" in out
 
 
-def test_backup_raw_all(drives, new, capsys):
+def test_backup_new_all(drives, new, capsys):
     primary, _ = drives
     for name in (r"trip\day1", r"trip\day2", r"OnlyForOthers\day0"):
         (new / name).mkdir(parents=True)
         (new / name / "1.ARW").write_bytes(b"one")
     waiting(primary, r"trip\day2", {"1.ARW": b"one"})  # already there
-    assert cli.main(["backup-raw", "--all", "--no-eject"]) == 0
+    assert cli.main(["backup-new", "--all", "--no-eject"]) == 0
     assert (primary / config.BACKUP_DIR / "trip" / "day1" / "1.ARW").is_file()
     assert not (primary / config.BACKUP_DIR / "OnlyForOthers").exists()
     assert "1 albums with originals not yet on the backup drive: trip/day1" in capsys.readouterr().err
-    assert cli.main(["backup-raw", "--all", "trip/day1"]) == 2
+    assert cli.main(["backup-new", "--all", "trip/day1"]) == 2

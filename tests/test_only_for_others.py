@@ -11,7 +11,7 @@ def new(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.mark.parametrize("command", ["import", "import-only", "backup-raw", "sync-clocks"])
+@pytest.mark.parametrize("command", ["import", "import-only", "backup-new", "sync-clocks"])
 def test_album_commands_refuse_only_for_others(new, command, capsys):
     assert cli.main([command, "OnlyForOthers/Pan Tau Maerz 2026", "--dry-run"]) == 2
     assert "leftovers of finished albums" in capsys.readouterr().err
