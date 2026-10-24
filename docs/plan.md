@@ -359,7 +359,7 @@ So:
   secondary, cloud), their checks, and `backup.pyz` for restores, which never
   needs albumflow. For the album raws it runs albumflow's CLI:
   `backup backup-all` runs `albumflow backup-new --all`, and
-  `backup update-secondary` / `update-cloud` run albumflow's subcommands of
+  `backup update-secondary` / `update-cloud` run albumflow's commands of
   the same name. A missing or failing albumflow makes the backup fail, never
   skipped silently. albumflow never calls backup. No wrapper scripts.
 - **Names, the same in both tools:** `backup-<what>` copies a kind of data

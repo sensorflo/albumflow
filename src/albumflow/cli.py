@@ -929,8 +929,9 @@ def cmd_completion(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="albumflow",
-                                     epilog="albumflow <subcommand> -h shows the options of a subcommand.")
-    sub = parser.add_subparsers(dest="target", required=True)
+                                     epilog="albumflow <command> -h shows the options of a command.")
+    parser._positionals.title = "commands"  # instead of "positional arguments", listed before the options
+    sub = parser.add_subparsers(dest="command", metavar="<command>", required=True, help="one of the following")
 
     def album_args(p, card=False, drive=False):
         p.add_argument("album_query", metavar="topic/album", nargs="?", default="",
@@ -1043,7 +1044,7 @@ def main(argv: list[str] | None = None) -> int:
         stream.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
-    if not (sys.argv[1:] if argv is None else argv):  # no subcommand: the same as -h
+    if not (sys.argv[1:] if argv is None else argv):  # no command: the same as -h
         parser.print_help()
         return 0
     args = parser.parse_args(argv)

@@ -6,7 +6,7 @@ import pytest
 from albumflow import cli, completion
 
 
-def test_table_has_subcommands_aliases_and_their_options():
+def test_table_has_commands_aliases_and_their_options():
     table = completion.table(cli.build_parser())
     top = [word for word, _ in table[""]]
     assert {"import", "i", "sync-clocks", "sc", "to-annex", "completion", "-h"} <= set(top)

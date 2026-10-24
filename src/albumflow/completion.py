@@ -1,6 +1,6 @@
 """Tab completion scripts for shells, generated from albumflow's argparse setup.
 
-Only subcommands and options (and the choices of positional arguments) are
+Only commands and options (and the choices of positional arguments) are
 completed; values such as album names are not. The script is static: it has
 to be generated again when the commands change (the PowerShell profile does
 that automatically when cli.py is newer than the cached script).
@@ -23,7 +23,7 @@ TABLE
 Register-ArgumentCompleter -Native -CommandName COMMANDS -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     $words = @($commandAst.CommandElements | ForEach-Object { $_.ToString() })
-    # The subcommand is the first word after the command, unless that is the word being completed.
+    # The command is the first word after the program name, unless that is the word being completed.
     $sub = ''
     if ($words.Count -gt 2 -or ($words.Count -eq 2 -and $wordToComplete -eq '')) { $sub = $words[1] }
     $candidates = $global:AlbumflowCompletion[$sub]
@@ -58,7 +58,7 @@ def _entries(parser: argparse.ArgumentParser) -> list[tuple[str, str]]:
 
 
 def table(parser: argparse.ArgumentParser) -> dict[str, list[tuple[str, str]]]:
-    """'' -> subcommands and top-level options; each subcommand (and alias) -> its options."""
+    """'' -> commands and top-level options; each command (and alias) -> its options."""
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     helps = {id(sub.choices[c.dest]): " ".join((c.help or "").split()) for c in sub._choices_actions}
     result = {"": [(name, helps.get(id(p)) or name) for name, p in sub.choices.items()] + _entries(parser)}
