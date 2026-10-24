@@ -377,7 +377,17 @@ So:
     `copied-to-secondary`)
   - the cloud: `G:\My Drive\Backup\pictures-new\<topic>\<album>`
     (`update-cloud`: copy `to-secondary` there, and albums pending a backup
-    from the PC; never moves or deletes)
+    from the PC). Cloud space is limited, so (2026-10-24):
+    - `update-cloud` copies kept photos (still in `new`/`new-old`) first and
+      always leaves `CLOUD_RESERVE` (2 GB) free. When space is short it
+      deletes the rejected photos (no longer in the new tree) from the
+      cloud, and copies rejected ones only into room that was free anyway.
+      Kept photos are never deleted; if even they don't fit, it stops.
+    - `update-secondary` deletes from the cloud what is on the secondary now.
+    - Deleting goes through the Google Drive API, permanently, so the space
+      is free right away (deleting on G: would go to Drive's trash, which
+      still counts for 30 days); without the login (`google-login`), or for
+      a file Drive doesn't have yet, it deletes locally, to the trash.
   - purging (below), only by hand.
 - **Shared contract:** only the drive markers and the rule "`Backup\` on a
   drive belongs to the tools, everything else is mine". Each tool defines the

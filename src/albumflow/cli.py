@@ -25,9 +25,9 @@ def _api(interactive: bool = False) -> gphotos_api.GPhotos:
     return gphotos_api.GPhotos(gphotos_api.credentials(interactive=interactive))
 
 
-def cmd_gphotos_login(args) -> int:
+def cmd_google_login(args) -> int:
     _api(interactive=True)
-    print("Logged in to Google Photos.")
+    print("Logged in to Google (Photos and Drive).")
     return 0
 
 
@@ -1032,8 +1032,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="also list the folders that are fine")
     p.set_defaults(func=cmd_annex_status)
 
-    p = sub.add_parser("gphotos-login", help="log in to Google Photos (opens the browser)")
-    p.set_defaults(func=cmd_gphotos_login)
+    p = sub.add_parser("google-login", help="log in to Google, for Google Photos (gphotos-*) and Google Drive "
+                                            "(deleting cloud copies permanently); opens the browser")
+    p.set_defaults(func=cmd_google_login)
 
     p = sub.add_parser("gphotos-albums", help="list the Google Photos albums created by albumflow")
     p.set_defaults(func=cmd_gphotos_albums)

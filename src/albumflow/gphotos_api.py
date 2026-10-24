@@ -20,6 +20,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
     "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
     "https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata",
+    # Google Drive: deleting cloud copies permanently (gdrive.py); files written through Google Drive for
+    # desktop aren't the app's own, so the narrower drive.file scope wouldn't see them
+    "https://www.googleapis.com/auth/drive",
 ]
 BASE = "https://photoslibrary.googleapis.com/v1"
 BATCH = 50  # API limit for batchCreate / batchAdd / batchRemove
@@ -46,6 +49,8 @@ def credentials(interactive: bool = True) -> Credentials:
     creds = None
     if token_file.exists():
         creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+    if creds and not creds.has_scopes(SCOPES):  # logged in before a permission was added
+        creds = None
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
@@ -53,7 +58,7 @@ def credentials(interactive: bool = True) -> Credentials:
             creds = None
     if not creds or not creds.valid:
         if not interactive:
-            raise ApiError("Not logged in to Google Photos. Run: albumflow gphotos-login")
+            raise ApiError("Not logged in to Google (or not with all permissions). Run: albumflow google-login")
         if not secret_file.exists():
             raise ApiError(f"Google client file missing: {secret_file}")
         flow = InstalledAppFlow.from_client_secrets_file(str(secret_file), SCOPES)

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from albumflow import annex, config
+from albumflow import annex, config, gdrive
 from albumflow import clock
 from albumflow.clock import split_name
 from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
@@ -391,22 +391,35 @@ def cloud_files_on(root: Path) -> list[Path]:
 
 
 def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> list[Path]:
-    """Delete the files from the cloud (one line per album), and folders left empty. Returns the deleted."""
+    """Delete the files from the cloud (one line per album), and folders left empty. Returns the deleted.
+
+    Permanently via the Google Drive API where possible, so the space is free right away; otherwise (not
+    logged in, or a file Drive doesn't have yet) locally, which moves them to Drive's trash.
+    """
     cloud = config.CLOUD_PICTURES
     by_album: dict[Path, list[Path]] = {}
     for path in files:
         by_album.setdefault(path.parent, []).append(path)
+    client = gdrive.drive() if by_album and not dry_run else None
+    if by_album and not dry_run and client is None:
+        log("Not logged in to Google Drive (albumflow google-login): deleted files go to Drive's trash, "
+            "where they still use space until it is emptied.")
+    to_trash = 0
     for folder, paths in by_album.items():
         size = sum(p.stat().st_size for p in paths)
         verb = "Would delete" if dry_run else "Deleting"
         log(f"{verb} from the cloud, {reason}: {folder.relative_to(cloud)}, {len(paths)} files, {size / 1e9:.1f} GB")
         if dry_run:
             continue
+        permanent = set(gdrive.delete_permanently(client, config.CLOUD_MY_DRIVE, paths)) if client else set()
+        to_trash += len(paths) - len(permanent)
         for path in paths:
-            path.unlink()
+            path.unlink(missing_ok=True)
         for empty in (folder, folder.parent):
             if empty != cloud and empty.is_dir() and not any(empty.iterdir()):
                 empty.rmdir()
+    if to_trash and client:
+        log(f"{to_trash} of them went to Drive's trash: Drive didn't have them (yet).")
     return [] if dry_run else files
 
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:

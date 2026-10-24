@@ -37,6 +37,9 @@ SECONDARY_DIR = r"Backup\pictures-new"
 # While the secondary backup drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))
+# The local folder of Google Drive's "My Drive" (Google Drive for desktop), containing CLOUD_PICTURES: deleting
+# there goes through the Drive API, permanently, instead of to the trash
+CLOUD_MY_DRIVE = Path(r"G:\My Drive")
 # update-cloud always leaves this much free in the cloud, for its other uses
 CLOUD_RESERVE = 2 * 10**9
 # Albums not on the secondary backup drive yet, but safe elsewhere: update-cloud doesn't copy them to the
