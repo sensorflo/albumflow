@@ -265,8 +265,10 @@ taken. Exact time doesn't matter.
 - A photo is only corrected once its original is on the backup SSD, which
   keeps the originals (import name and content), as does the card's Backup
   folder. `backup-new` treats `<t>-X` as backed up if the SSD has `X`.
-- Once an album has clock readings, `import` and `backup-new` apply them after
-  the backup, so later imports end up as if corrected afterwards.
+- Once an album has clock readings, `import` applies them after its backup,
+  so later imports end up as if corrected afterwards; otherwise
+  `sync-clocks` does. `backup-new` only backs up (it also runs as part of
+  the backup tool's `backup-all`, where clock corrections don't belong).
 
 Later:
 

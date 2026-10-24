@@ -158,8 +158,6 @@ def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool 
         copy_file(src, dest, counter.add)
     log("Backup done.")
     set_backed_up(source_dir)
-    if clock.has_measurements(source_dir):  # the originals are on the backup now
-        clock.apply(source_dir, album_backup_dirs(drive, topic, album), log=log)
     if remove_drive:
         remove_backup_drive(dest_dir, log)
 
