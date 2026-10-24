@@ -236,3 +236,16 @@ def test_update_cloud_skips_albums_safe_elsewhere(drives, cloud, monkeypatch, ca
     assert cli.main(["backup-status"]) == 0
     out = capsys.readouterr().out
     assert "but safe elsewhere" in out and "  party\\fest: 2 files, 0.0 GB (SD card at home)" in out
+
+
+def test_backup_raw_all(drives, new, capsys):
+    primary, _ = drives
+    for name in (r"trip\day1", r"trip\day2", r"OnlyForOthers\day0"):
+        (new / name).mkdir(parents=True)
+        (new / name / "1.ARW").write_bytes(b"one")
+    waiting(primary, r"trip\day2", {"1.ARW": b"one"})  # already there
+    assert cli.main(["backup-raw", "--all", "--no-eject"]) == 0
+    assert (primary / config.BACKUP_DIR / "trip" / "day1" / "1.ARW").is_file()
+    assert not (primary / config.BACKUP_DIR / "OnlyForOthers").exists()
+    assert "1 albums with originals not yet on the backup drive: trip/day1" in capsys.readouterr().err
+    assert cli.main(["backup-raw", "--all", "trip/day1"]) == 2

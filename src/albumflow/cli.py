@@ -801,8 +801,30 @@ def cmd_backup(args) -> int:
     drive = _path(args.drive)
     if not args.dry_run:
         drive = backup.wait_for_backup_drive(drive, display.log)
-    backup.backup_raw(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
-                      progress=_BackupBar(display, drive).progress, remove_drive=not args.no_eject)
+    progress = _BackupBar(display, drive).progress
+    if not args.all:
+        backup.backup_raw(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
+                          progress=progress, remove_drive=not args.no_eject)
+        remind_pending(display.log)
+        return 0
+    drive = drive or backup.find_backup_drive()
+    if drive is None:  # dry run
+        display.log("The backup drive is not connected; the backup would wait for it.")
+        return 0
+    albums = []
+    for album in album_candidates(""):
+        source = config.album_dir(album.topic, album.name)
+        if backup.missing_on_backup(source, backup.backup_dir(drive, album.topic, album.name),
+                                    [backup.copied_dir(drive, album.topic, album.name)]):
+            albums.append(album)
+    display.log(f"{len(albums)} albums with originals not yet on the backup drive"
+                + (": " + ", ".join(map(str, albums)) if albums else "."))
+    for album in albums:
+        display.log(f"{album}:")
+        backup.backup_raw(album.topic, album.name, drive=drive, dry_run=args.dry_run, log=display.log,
+                          progress=progress)
+    if not args.no_eject and not args.dry_run:
+        backup.remove_backup_drive(drive, display.log)
     remind_pending(display.log)
     return 0
 
@@ -938,6 +960,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("backup-raw", aliases=["br"], help="copy an album's raw originals to the backup drive")
     album_args(p, drive=True)
+    p.add_argument("--all", action="store_true",
+                   help="instead of one album: every album with originals not yet on the backup drive")
     p.set_defaults(func=cmd_backup)
 
     p = sub.add_parser("update-secondary",
@@ -1023,7 +1047,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = parser.parse_args(argv)
     try:
-        if hasattr(args, "album_query"):
+        if getattr(args, "all", False) and args.album_query:
+            raise AlbumflowError("Give either an album or --all, not both")
+        if hasattr(args, "album_query") and not getattr(args, "all", False):
             args.topic, args.album = choose_album(args.album_query, getattr(args, "create_album", False),
                                                   candidates=album_candidates(args.album_query))
         return args.func(args)
