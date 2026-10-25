@@ -1020,7 +1020,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_backup_status)
 
     p = add_command("purge-backup", help="delete finished albums (those in Originals) from the connected "
-                                            "backup drives, to make room; you choose, then confirm by typing 'delete'")
+                                         "backup drives, to make room; you choose, then confirm by typing 'delete'",
+                    description="Delete finished albums from the connected backup drives, to make room. An album "
+                                "is finished once it is in Originals (also when moved to the annex): restic backs "
+                                "up what was kept of it. Offered per drive, the backup drive first: on the backup "
+                                "drive only the albums in copied-to-secondary (what waits in to-secondary must "
+                                "reach the secondary first), on the secondary all of its pictures-new. Listed with "
+                                "size and how long untouched, large and old first. Choose by number (e.g. 1 3 or "
+                                "1-4; Enter: none), then type 'delete' to confirm. Deleting loses the photos kept "
+                                "nowhere else: the rejected ones, and those in new\\OnlyForOthers, which then exist "
+                                "only on the laptop. The cloud and the SD cards aren't touched. No other command "
+                                "runs this one.")
     p.set_defaults(func=cmd_purge_backup)
 
     p = add_command("sync-clocks", aliases=["sc"],
