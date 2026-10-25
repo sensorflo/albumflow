@@ -945,9 +945,13 @@ class _HelpFormatter(argparse.HelpFormatter):
             return "".join(self._format_action(a) for a in action._get_subactions())
         return super()._format_action(action)
 
+    # Wrap at spaces only, so names like backup-new aren't split at their hyphen
     def _split_lines(self, text, width):
-        # Wrap at spaces only, so names like backup-files aren't split at their hyphen
         return textwrap.wrap(" ".join(text.split()), width, break_on_hyphens=False)
+
+    def _fill_text(self, text, width, indent):
+        return textwrap.fill(" ".join(text.split()), width, initial_indent=indent, subsequent_indent=indent,
+                             break_on_hyphens=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -955,6 +959,9 @@ def build_parser() -> argparse.ArgumentParser:
                                      epilog="albumflow <command> -h shows the options of a command.")
     parser._positionals.title = "commands"  # instead of "positional arguments", listed before the options
     sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+
+    def add_command(*args, **kwargs):
+        return sub.add_parser(*args, formatter_class=_HelpFormatter, **kwargs)  # not inherited from parser
 
     def album_args(p, card=False, drive=False):
         p.add_argument("album_query", metavar="topic/album", nargs="?", default="",
@@ -974,42 +981,49 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--no-eject", action="store_true", help=f"don't eject {what} when done")
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
 
-    p = sub.add_parser("import", aliases=["i"], help="import-only, then backup-new")
+    p = add_command("import", aliases=["i"], help="import-only, then backup-new")
     album_args(p, card=True, drive=True)
     p.set_defaults(func=cmd_import)
 
-    p = sub.add_parser("import-only", aliases=["io"], help="import photos from the camera card, without backup")
+    p = add_command("import-only", aliases=["io"], help="import photos from the camera card, without backup")
     album_args(p, card=True)
     p.set_defaults(func=cmd_import_only)
 
-    p = sub.add_parser("backup-new", aliases=["bn"],
+    p = add_command("backup-new", aliases=["bn"],
                        help="copy an album's raw originals (in the new tree) to the backup drive")
     album_args(p, drive=True)
     p.add_argument("--all", action="store_true",
                    help="instead of one album: every album with originals not yet on the backup drive")
     p.set_defaults(func=cmd_backup_new)
 
-    p = sub.add_parser("update-secondary",
-                       help="copy the albums waiting on the backup drive to the secondary backup drive")
+    p = add_command("update-secondary",
+                       help="copy the albums waiting on the backup drive to the secondary backup drive",
+                       description="Copy the albums waiting on the backup drive (to-secondary) to the secondary "
+                                   "backup drive, then move them on the backup drive to copied-to-secondary, and "
+                                   "delete from the cloud what is on the secondary now. The backup tool runs it as "
+                                   "part of its update-secondary. Whether the backup tool's backup-all also updates "
+                                   "the cloud (update-cloud) is its setting backup_all_includes_update_cloud, "
+                                   "in %APPDATA%\\backup\\config.json: after this, the cloud is no longer needed "
+                                   "as a stand-in for the secondary.")
     p.add_argument("--no-eject", action="store_true", help="don't remove both backup drives when done")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
 
-    p = sub.add_parser("update-cloud", help="copy what hasn't reached the secondary backup drive to the cloud, "
+    p = add_command("update-cloud", help="copy what hasn't reached the secondary backup drive to the cloud, "
                                             f"standing in for it ({config.CLOUD_PICTURES}): the albums waiting on "
                                             "the backup drive, and albums pending a backup, from the PC")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_cloud)
 
-    p = sub.add_parser("backup-status", help="what isn't safe yet: photos not on the backup drive, and what "
+    p = add_command("backup-status", help="what isn't safe yet: photos not on the backup drive, and what "
                                              "hasn't reached the secondary backup drive or the cloud")
     p.set_defaults(func=cmd_backup_status)
 
-    p = sub.add_parser("purge-backup", help="delete finished albums (those in Originals) from the connected "
+    p = add_command("purge-backup", help="delete finished albums (those in Originals) from the connected "
                                             "backup drives, to make room; you choose, then confirm by typing 'delete'")
     p.set_defaults(func=cmd_purge_backup)
 
-    p = sub.add_parser("sync-clocks", aliases=["sc"],
+    p = add_command("sync-clocks", aliases=["sc"],
                        help="record clock readings; correct photos so all cameras' photos are in order")
     album_args(p)
     p.add_argument("-r", "--reading", action="append", metavar="PHOTO=TIME",
@@ -1024,7 +1038,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_sync_clocks)
 
     folder_help = "a path ('.', './foo', '~/Music/x', 'C:\\...'), or else a loose album query like 'party/secret'"
-    p = sub.add_parser("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place",
+    p = add_command("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place",
                        description="Move a folder to the annex drive, leaving a '(annex)' link in its place. If the "
                                    "annex has the folder already, its files are merged into it. Below "
                                    f"{config.REJECTED_TREE}, only the files move: the folder stays, as the drop "
@@ -1036,31 +1050,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_to_annex)
 
-    p = sub.add_parser("from-annex", help="move a folder back from the annex drive, replacing its link")
+    p = add_command("from-annex", help="move a folder back from the annex drive, replacing its link")
     p.add_argument("target", nargs="?", default="", metavar="folder",
                    help=folder_help + "; or its '(annex)' link; none: the most recent albums in the annex")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_from_annex)
 
-    p = sub.add_parser("annex-status", help="list what is in the annex, and problems such as missing links")
+    p = add_command("annex-status", help="list what is in the annex, and problems such as missing links")
     p.add_argument("--fix", action="store_true", help="create missing links (asks first)")
     p.add_argument("-v", "--verbose", action="store_true", help="also list the folders that are fine")
     p.set_defaults(func=cmd_annex_status)
 
-    p = sub.add_parser("google-login", help="log in to Google, for Google Photos (gphotos-*) and Google Drive "
+    p = add_command("google-login", help="log in to Google, for Google Photos (gphotos-*) and Google Drive "
                                             "(deleting cloud copies permanently); opens the browser")
     p.set_defaults(func=cmd_google_login)
 
-    p = sub.add_parser("gphotos-albums", help="list the Google Photos albums created by albumflow")
+    p = add_command("gphotos-albums", help="list the Google Photos albums created by albumflow")
     p.set_defaults(func=cmd_gphotos_albums)
 
-    p = sub.add_parser("gphotos-sync", help="make a Google Photos album an exact mirror of a folder")
+    p = add_command("gphotos-sync", help="make a Google Photos album an exact mirror of a folder")
     p.add_argument("-f", "--folder", required=True, help="folder with the photos to mirror")
     p.add_argument("--title", help="album title (default: folder name)")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_gphotos_sync)
 
-    p = sub.add_parser("completion", help="print a tab completion script for a shell (PowerShell)")
+    p = add_command("completion", help="print a tab completion script for a shell (PowerShell)")
     p.add_argument("shell", choices=["powershell"])
     p.add_argument("-o", "--output", help="write it to this file instead")
     p.set_defaults(func=cmd_completion)
