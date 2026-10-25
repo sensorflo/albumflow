@@ -8,7 +8,7 @@ from albumflow.files import AlbumflowError
 
 @pytest.fixture
 def drives(tmp_path, monkeypatch):
-    """A backup drive and a secondary backup drive, and the laptop's Originals."""
+    """A backup drive and a secondary drive, and the laptop's Originals."""
     primary, secondary = tmp_path / "P", tmp_path / "S"
     for drive, marker in ((primary, config.BACKUP_MARKER), (secondary, config.SECONDARY_BACKUP_MARKER)):
         drive.mkdir()
@@ -120,5 +120,5 @@ def test_purging_the_last_album_of_a_topic_removes_the_topic_folder(drives):
 
 def test_purge_needs_a_drive(drives, monkeypatch):
     monkeypatch.setattr(backup, "drives", lambda: [])
-    with pytest.raises(AlbumflowError, match="Neither backup drive"):
+    with pytest.raises(AlbumflowError, match="Neither the primary nor the secondary drive"):
         cli.cmd_purge_backup(None, ask=answers())

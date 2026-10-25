@@ -96,7 +96,7 @@ def make_photo(path, capture_time, model):
 
 
 def drive_root(ssd_album):
-    """The backup drive of an album folder on it: above BACKUP_DIR/<topic>/<album>."""
+    """The primary drive of an album folder on it: above BACKUP_DIR/<topic>/<album>."""
     return ssd_album.parents[len(Path(config.BACKUP_DIR).parts) + 1]
 
 
@@ -232,7 +232,7 @@ def test_sync_clocks_asks_for_readings(album, monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     assert cli.main(["sc", "party/fest"]) == 0
     assert set(clock.AlbumState(album).clock) == {"MASTER", "OTHER"}
-    assert "The backup drive is not connected" in capsys.readouterr().err
+    assert "The primary drive is not connected" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("text, expected", [

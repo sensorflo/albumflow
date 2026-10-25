@@ -44,7 +44,7 @@ def test_unsafe_folders_are_listed_but_only_deleted_with_force(card, monkeypatch
     cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "1")
     listed = [line for line in lines if line.startswith("  ")]
     assert "older-fest" in listed[0] and "old-fest" in listed[1] and len(listed) == 2  # not "current"
-    assert "not yet on the secondary or in the cloud; backup drive not connected" in listed[0]
+    assert "not yet in a secondary backup; primary drive not connected" in listed[0]
     assert (card / "Backup" / "older-fest").exists()
     assert any("not yet safe (--force-prune" in line for line in lines)
     cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "1", force=True)
@@ -64,8 +64,8 @@ def test_on_the_backup_drive_alone_is_not_safe(card, monkeypatch, tmp_path):
     lines = []
     cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "1 2")
     listed = [line for line in lines if line.startswith("  ")]
-    assert "1 of 1 files not yet on the secondary or in the cloud, 1 not even on the backup drive" in listed[0]
-    assert listed[1].endswith("(1 of 1 files not yet on the secondary or in the cloud)")  # old-fest
+    assert "1 of 1 files not yet in a secondary backup, 1 not even on the primary drive" in listed[0]
+    assert listed[1].endswith("(1 of 1 files not yet in a secondary backup)")  # old-fest
     assert (card / "Backup" / "older-fest").exists() and (card / "Backup" / "old-fest").exists()
 
 
@@ -85,5 +85,5 @@ def test_safe_once_on_the_secondary_or_in_the_cloud(card, monkeypatch, tmp_path,
     lines = []
     cli.offer_pruning(card, "current", log=lines.append, ask=lambda _: "2")
     listed = [line for line in lines if line.startswith("  ")]
-    assert listed[1].endswith("(safe: on the secondary or in the cloud)")
+    assert listed[1].endswith("(safe: in a secondary backup)")
     assert not (card / "Backup" / "old-fest").exists()

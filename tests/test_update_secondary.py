@@ -8,7 +8,7 @@ from albumflow.files import AlbumflowError
 
 @pytest.fixture
 def drives(tmp_path, monkeypatch):
-    """A backup drive and a secondary backup drive, with plenty of space."""
+    """A backup drive and a secondary drive, with plenty of space."""
     primary, secondary = tmp_path / "P", tmp_path / "S"
     for drive, marker in ((primary, config.BACKUP_MARKER), (secondary, config.SECONDARY_BACKUP_MARKER)):
         drive.mkdir()
@@ -107,7 +107,7 @@ def test_dry_run_changes_nothing(drives):
 def test_needs_both_drives(drives, monkeypatch):
     primary, _ = drives
     monkeypatch.setattr(backup, "drives", lambda: [primary])
-    with pytest.raises(AlbumflowError, match="secondary backup drive"):
+    with pytest.raises(AlbumflowError, match="secondary drive"):
         backup.update_secondary(log=lambda *_: None)
 
 
@@ -204,13 +204,13 @@ def test_backup_status(drives, cloud, new, capsys, monkeypatch):
     waiting(primary, r"trip\day1", {"1.ARW": b"one"})
     assert cli.main(["backup-status"]) == 0
     out = capsys.readouterr().out
-    assert "trip/day1: 1 photos" in out  # 2.ARW is not on the backup drive
+    assert "trip/day1: 1 photos" in out  # 2.ARW is not on the primary drive
     assert "trip\\day1: 1 files" in out  # 1.ARW waits on the drive, not in the cloud
     assert "trip\\day1 (pending a backup, from the PC): 1 files" in out  # 2.ARW
     monkeypatch.setattr(backup, "drives", lambda: [])
     assert cli.main(["backup-status"]) == 0
     out = capsys.readouterr().out
-    assert "backup drive not connected" in out and "  trip/day1" in out
+    assert "primary drive not connected" in out and "  trip/day1" in out
 
 
 def test_import_offers_to_go_on_without_the_backup_drive(new, monkeypatch, capsys):
@@ -250,7 +250,7 @@ def test_backup_new_all(drives, new, capsys):
     assert cli.main(["backup-new", "--all", "--no-eject"]) == 0
     assert (primary / config.BACKUP_DIR / "trip" / "day1" / "1.ARW").is_file()
     assert not (primary / config.BACKUP_DIR / "OnlyForOthers").exists()
-    assert "1 albums with originals not yet on the backup drive: trip/day1" in capsys.readouterr().err
+    assert "1 albums with originals not yet on the primary drive: trip/day1" in capsys.readouterr().err
     assert cli.main(["backup-new", "--all", "trip/day1"]) == 2
 
 
@@ -266,7 +266,7 @@ def test_update_secondary_deletes_from_the_cloud_what_is_on_the_secondary(drives
     backup.update_secondary(log=lines.append)
     assert not (cloud / "party").exists()
     assert tree(cloud) == {r"trip\open\3.ARW": b"three"}
-    assert r"Deleting from the cloud, on the secondary now: party\fest, 3 files, 0.0 GB" in lines
+    assert r"Deleting from the cloud, on the secondary drive now: party\fest, 3 files, 0.0 GB" in lines
 
 
 def test_update_secondary_keeps_a_cloud_file_of_another_size(drives, cloud):

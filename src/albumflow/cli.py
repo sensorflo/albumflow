@@ -270,8 +270,8 @@ def parse_selection(answer: str, count: int) -> list[int] | None:
 def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = False) -> None:
     """If the card is fuller than allowed, offer to delete old folders in its Backup folder.
 
-    A folder is only deleted once it is safe, i.e. all its files are on the secondary backup drive or in
-    the cloud (see backup.safe_dirs_named); with force, also before.
+    A folder is only deleted once it is safe, i.e. all its files are in a secondary backup (on the secondary drive or
+    in the cloud) (see backup.secondary_backup_dirs_named); with force, also before.
     """
     free = card_import.free_fraction(card)
     if free >= config.CARD_MIN_FREE:
@@ -282,7 +282,7 @@ def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = Fa
         return
     try:
         ssd = backup.find_backup_drive()
-        safe_dirs = {old.path.name: backup.safe_dirs_named(old.path.name) for old in olds}
+        safe_dirs = {old.path.name: backup.secondary_backup_dirs_named(old.path.name) for old in olds}
     except AlbumflowError as e:
         log(f"Warning: {e}")
         ssd, safe_dirs = None, {old.path.name: [] for old in olds}
@@ -292,14 +292,14 @@ def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = Fa
     for i, old in enumerate(olds, 1):
         missing = card_import.missing_on(old, safe_dirs[old.path.name])
         if not missing:
-            status = "safe: on the secondary or in the cloud"
+            status = "safe: in a secondary backup"
         else:
             unsafe.add(i)
-            status = f"{missing} of {len(old.files)} files not yet on the secondary or in the cloud"
+            status = f"{missing} of {len(old.files)} files not yet in a secondary backup"
             if ssd is None:
-                status += "; backup drive not connected"
+                status += "; primary drive not connected"
             elif not_on_drive := card_import.missing_on(old, backup.backup_dirs_named(ssd, old.path.name)):
-                status += f", {not_on_drive} not even on the backup drive"
+                status += f", {not_on_drive} not even on the primary drive"
         date = datetime.date.fromtimestamp(old.mtime)
         log(f"  {i}  {date:%Y-%m-%d}  {old.size / 1e9:6.1f} GB  {old.path.name}  ({status})")
     answer = ask("Delete which? (e.g. 1 2 or 1-3; Enter: none): ")
@@ -336,7 +336,7 @@ class _BackupBar:
 def cmd_import(args, ask=None) -> int:
     remind_pending()
     if not args.dry_run and backup.find_backup_drive(_path(args.drive)) is None:
-        answer = (ask or ask_key)("The backup drive is not connected: [w]ait for it, or [c]ontinue without "
+        answer = (ask or ask_key)("The primary drive is not connected: [w]ait for it, or [c]ontinue without "
                                   "the backup? [w/c/q] ", "wcq")
         if answer == "q":
             raise KeyboardInterrupt
@@ -364,7 +364,7 @@ def cmd_import_only(args) -> int:
 
 
 def remind_pending(log=print) -> None:
-    """One line naming the albums whose photos may not be on the backup drive yet."""
+    """One line naming the albums whose photos may not be on the primary drive yet."""
     pending = backup.pending_albums()
     if pending:
         log(f"Backup pending: {', '.join(f'{t}/{a}' for t, a in pending)} (details: albumflow backup-status)")
@@ -391,7 +391,7 @@ def _age(mtime: float) -> str:
 
 def album_candidates(query: str) -> list[album_choice.Album]:
     """The albums the album commands (import, backup-new, sync-clocks, ...) work on: not the sub-topic
-    OnlyForOthers, which holds the leftovers of finished albums (their raws are on the backup drives
+    OnlyForOthers, which holds the leftovers of finished albums (their raws are on the primary and secondary drives
     already, under the album's own topic)."""
     try:
         topic, _ = album_choice.split_query(query)
@@ -569,7 +569,7 @@ def cmd_sync_clocks(args) -> int:
 
     drive = backup.find_backup_drive(_path(args.drive))
     if drive is None:
-        log("The backup drive is not connected: photos are only corrected once their originals are on it.")
+        log("The primary drive is not connected: photos are only corrected once their originals are on it.")
     dirs = backup.album_backup_dirs(drive, args.topic, args.album) if drive else []
 
     def confirm(question: str) -> bool:
@@ -819,7 +819,7 @@ def cmd_backup_new(args) -> int:
         return 0
     drive = drive or backup.find_backup_drive()
     if drive is None:  # dry run
-        display.log("The backup drive is not connected; the backup would wait for it.")
+        display.log("The primary drive is not connected; the backup would wait for it.")
         return 0
     albums = []
     for album in album_candidates(""):
@@ -827,7 +827,7 @@ def cmd_backup_new(args) -> int:
         if backup.missing_on_backup(source, backup.backup_dir(drive, album.topic, album.name),
                                     [backup.copied_dir(drive, album.topic, album.name)]):
             albums.append(album)
-    display.log(f"{len(albums)} albums with originals not yet on the backup drive"
+    display.log(f"{len(albums)} albums with originals not yet on the primary drive"
                 + (": " + ", ".join(map(str, albums)) if albums else "."))
     for album in albums:
         display.log(f"{album}:")
@@ -855,11 +855,11 @@ def cmd_update_cloud(args) -> int:
 
 
 def cmd_backup_status(args) -> int:
-    """What isn't safe yet: photos not on the backup drive, and what hasn't reached the secondary or cloud."""
+    """What isn't safe yet: photos not on the primary drive, and what isn't in a secondary backup yet."""
     drive = backup.find_backup_drive()
-    print("Not on the backup drive yet:")
+    print("Not on the primary drive yet:")
     if drive is None:
-        print("  (backup drive not connected: the albums marked as pending a backup)")
+        print("  (primary drive not connected: the albums marked as pending a backup)")
         lines = [f"  {t}/{a}" for t, a in backup.pending_albums()]
     else:
         lines = []
@@ -875,9 +875,9 @@ def cmd_backup_status(args) -> int:
                 size = sum(src.stat().st_size for src, _ in todo)
                 lines.append(f"  {album}: {len(todo)} photos, {size / 1e9:.1f} GB")
     print("\n".join(lines) if lines else "  nothing")
-    print("Not yet on the secondary backup drive or in the cloud:")
+    print("Not yet in a secondary backup:")
     if drive is None:
-        print("  (backup drive not connected: only the albums pending a backup, as on the PC)")
+        print("  (primary drive not connected: only the albums pending a backup, as on the PC)")
     lines, elsewhere = [], []
     for album in backup.cloud_todo(drive):
         if album.todo:
@@ -888,7 +888,7 @@ def cmd_backup_status(args) -> int:
                 lines.append(line)
     print("\n".join(lines) if lines else "  nothing")
     if elsewhere:
-        print("Not yet on the secondary backup drive or in the cloud, but safe elsewhere "
+        print("Not yet in a secondary backup, but safe elsewhere "
               f"(SAFE_ELSEWHERE in {config.__file__}):")
         print("\n".join(elsewhere))
     return 0
@@ -897,7 +897,7 @@ def cmd_backup_status(args) -> int:
 def cmd_purge_backup(args, ask=input) -> int:
     roots = backup.purge_roots()
     if not roots:
-        raise AlbumflowError("Neither backup drive is connected")
+        raise AlbumflowError("Neither the primary nor the secondary drive is connected")
     for description, root in roots:
         candidates = backup.purgeable(root)
         usage = shutil.disk_usage(root.anchor)
@@ -975,10 +975,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="create the album folder if it doesn't exist yet")
             p.add_argument("--force-prune", action="store_true",
                            help="when a full card offers to delete old backups on it, also delete those not "
-                                "yet on the secondary backup drive or in the cloud")
+                                "yet in a secondary backup")
         if drive:
-            p.add_argument("--drive", help=f"backup drive (default: the one with a {config.BACKUP_MARKER} file)")
-        what = " and ".join(w for w, used in (("cards", card), ("the backup drive", drive)) if used)
+            p.add_argument("--drive", help=f"primary drive (default: the one with a {config.BACKUP_MARKER} file)")
+        what = " and ".join(w for w, used in (("cards", card), ("the primary drive", drive)) if used)
         if what:
             p.add_argument("--no-eject", action="store_true", help=f"don't eject {what} when done")
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
@@ -992,40 +992,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_import_only)
 
     p = add_command("backup-new", aliases=["bn"],
-                       help="copy an album's raw originals (in the new tree) to the backup drive")
+                       help="copy an album's raw originals (in the new tree) to the primary drive")
     album_args(p, drive=True)
     p.add_argument("--all", action="store_true",
-                   help="instead of one album: every album with originals not yet on the backup drive")
+                   help="instead of one album: every album with originals not yet on the primary drive")
     p.set_defaults(func=cmd_backup_new)
 
     p = add_command("update-secondary",
-                       help="copy the albums waiting on the backup drive to the secondary backup drive",
-                       description="Copy the albums waiting on the backup drive (to-secondary) to the secondary "
-                                   "backup drive, then move them on the backup drive to copied-to-secondary, and "
-                                   "delete from the cloud what is on the secondary now. The backup tool runs it as "
+                       help="copy the albums waiting on the primary drive to the secondary drive",
+                       description="Copy the albums waiting on the primary drive (to-secondary) to the secondary "
+                                   "drive, then move them on the primary drive to copied-to-secondary, and delete "
+                                   "from the cloud what is on the secondary drive now. The backup tool runs it as "
                                    "part of its update-secondary. Whether the backup tool's backup-all also updates "
                                    "the cloud (update-cloud) is its setting backup_all_includes_update_cloud, "
                                    "in %APPDATA%\\backup\\config.json: after this, the cloud is no longer needed "
-                                   "as a stand-in for the secondary.")
-    p.add_argument("--no-eject", action="store_true", help="don't remove both backup drives when done")
+                                   "as a stand-in for the secondary drive.")
+    p.add_argument("--no-eject", action="store_true", help="don't remove both drives when done")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
 
-    p = add_command("update-cloud", help="copy what hasn't reached the secondary backup drive to the cloud, "
+    p = add_command("update-cloud", help="copy what hasn't reached the secondary drive to the cloud, "
                                             f"standing in for it ({config.CLOUD_PICTURES}): the albums waiting on "
-                                            "the backup drive, and albums pending a backup, from the PC")
+                                            "the primary drive, and albums pending a backup, from the PC")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_cloud)
 
-    p = add_command("backup-status", help="what isn't safe yet: photos not on the backup drive, and what "
-                                             "hasn't reached the secondary backup drive or the cloud")
+    p = add_command("backup-status", help="what isn't safe yet: photos not on the primary drive, and what "
+                                             "isn't in a secondary backup yet")
     p.set_defaults(func=cmd_backup_status)
 
     p = add_command("purge-backup", help="delete finished albums (those in Originals) from the connected "
                                          "backup drives, to make room; you choose, then confirm by typing 'delete'",
-                    description="Delete finished albums from the connected backup drives, to make room. An album "
+                    description="Delete finished albums from the connected primary and secondary drives, to make room. An album "
                                 "is finished once it is in Originals (also when moved to the annex): restic backs "
-                                "up what was kept of it. Offered per drive, the backup drive first: on the backup "
+                                "up what was kept of it. Offered per drive, the primary drive first: on the backup "
                                 "drive only the albums in copied-to-secondary (what waits in to-secondary must "
                                 "reach the secondary first), on the secondary all of its pictures-new. Listed with "
                                 "size and how long untouched, large and old first. Choose by number (e.g. 1 3 or "
@@ -1041,7 +1041,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--reading", action="append", metavar="PHOTO=TIME",
                    help="a clock photo (part of its name is enough) and the time the clock in it shows, "
                         "e.g. _DSC7115=09:28:54; repeat for each camera. Without any: asked for")
-    p.add_argument("--drive", help=f"backup drive (default: the one with a {config.BACKUP_MARKER} file)")
+    p.add_argument("--drive", help=f"primary drive (default: the one with a {config.BACKUP_MARKER} file)")
     p.add_argument("--readings-from", metavar="topic/album",
                    help="take over the clock readings of another album, e.g. of the same festival (loose "
                         "topic/album like the album itself); this album's own readings are kept")

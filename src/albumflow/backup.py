@@ -1,8 +1,8 @@
-"""Back up an album's raw originals to the external backup drive, and from there to the secondary one.
+"""Back up an album's raw originals to the primary drive, and from there to the secondary drive or the cloud.
 
 Only adds files, never deletes or overwrites: photos culled on the PC later
-stay on the backup. update-secondary only moves files on the backup drive,
-once they are on the secondary. Only purging deletes: finished albums, chosen
+stay on the backup. update-secondary only moves files on the primary drive,
+once they are on the secondary drive. Only purging deletes: finished albums, chosen
 by hand.
 """
 
@@ -22,11 +22,11 @@ from albumflow.clock import split_name
 from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
 
 
-POLL_SECONDS = 2.0  # how often to look for the backup drive
+POLL_SECONDS = 2.0  # how often to look for the primary drive
 
 
 def set_backed_up(album_dir: Path) -> None:
-    """Clear the album's "backup pending" mark: all its originals are on the backup drive now."""
+    """Clear the album's "backup pending" mark: all its originals are on the primary drive now."""
     state = clock.AlbumState(album_dir)
     if state.backup_pending:
         state.backup_pending = False
@@ -34,7 +34,7 @@ def set_backed_up(album_dir: Path) -> None:
 
 
 def pending_albums() -> list[tuple[str, str]]:
-    """(topic, album) of the albums with photos imported but maybe not yet on the backup drive."""
+    """(topic, album) of the albums with photos imported but maybe not yet on the primary drive."""
     found = []
     for state_file in sorted(config.PICTURES_NEW.glob(f"*/*/{clock.STATE_FILE}")):
         if clock.AlbumState(state_file.parent).backup_pending:
@@ -48,17 +48,17 @@ def find_backup_drive(drive: Path | None = None) -> Path | None:
         return drive if drive.exists() else None
     found = [d for d in drives() if (d / config.BACKUP_MARKER).is_file()]
     if len(found) > 1:
-        raise AlbumflowError(f"Several backup drives found: {', '.join(str(d) for d in found)}")
+        raise AlbumflowError(f"Several primary drives found: {', '.join(str(d) for d in found)}")
     return found[0] if found else None
 
 
 def wait_for_backup_drive(drive: Path | None = None, log=print, stop: threading.Event | None = None) -> Path | None:
-    """Wait until the backup drive is connected. Returns None if stop is set first."""
+    """Wait until the primary drive is connected. Returns None if stop is set first."""
     found = find_backup_drive(drive)
     if found:
         return found
     what = drive or f"a drive with a {config.BACKUP_MARKER} file"
-    log(f"Waiting for the backup drive ({what})...")
+    log(f"Waiting for the primary drive ({what})...")
     found = poll_until(lambda: find_backup_drive(drive), POLL_SECONDS, stop)
     if found:
         log(f"Backup drive {found} connected.")
@@ -71,26 +71,26 @@ def backup_dir(drive: Path, topic: str, album: str) -> Path:
 
 
 def copied_dir(drive: Path, topic: str, album: str) -> Path:
-    """Where the album's originals are on the backup drive once copied to the secondary backup drive."""
+    """Where the album's originals are on the primary drive once copied to the secondary drive."""
     return drive / config.COPIED_DIR / topic / album
 
 
 def album_backup_dirs(drive: Path, topic: str, album: str) -> list[Path]:
-    """Where the album's originals may be on the backup drive: still waiting for the copy to the secondary
-    backup drive, or already copied (photos backed up after that copy wait again)."""
+    """Where the album's originals may be on the primary drive: still waiting for the copy to the secondary
+    drive, or already copied (photos backed up after that copy wait again)."""
     return [backup_dir(drive, topic, album), copied_dir(drive, topic, album)]
 
 
 def backup_dirs_named(drive: Path, album: str) -> list[Path]:
-    """The album folders with this name on the backup drive, in any topic, copied to the secondary or not."""
+    """The album folders with this name on the primary drive, in any topic, copied to the secondary drive or not."""
     return [folder for root in (config.BACKUP_DIR, config.COPIED_DIR)
             for folder in sorted((drive / root).glob(f"*/{album}")) if folder.is_dir()]
 
 
-def safe_dirs_named(album: str) -> list[Path]:
-    """The folders with this album name, in any topic, whose files count as safe: those on the secondary
-    backup drive (also those moved to COPIED_DIR on the backup drive, which happens only once they are on the
-    secondary) and those in the cloud. Only what is connected is looked at."""
+def secondary_backup_dirs_named(album: str) -> list[Path]:
+    """The folders with this album name, in any topic, whose files are in a secondary backup: those on the
+    secondary drive (also those moved to COPIED_DIR on the primary drive, which happens only once they are on
+    the secondary drive) and those in the cloud. Only what is connected is looked at."""
     roots = []
     drive, secondary = find_backup_drive(), find_secondary_drive()
     if drive:
@@ -120,7 +120,7 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = ()) -
             # Clock-corrected on the PC; the backup keeps the original under its import name.
             if not on_backup(dirs, import_name):
                 raise AlbumflowError(f"{src.name} was clock-corrected, but its original {import_name} "
-                                     f"is not on the backup drive")
+                                     f"is not on the primary drive")
             continue
         dest = on_backup(dirs, src.name)
         if dest is None:
@@ -133,14 +133,14 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = ()) -
 
 def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool = False,
                log=print, progress: Progress | None = None, remove_drive: bool = False) -> None:
-    """Copy the album's originals missing on the backup drive; with remove_drive, remove it at the end."""
+    """Copy the album's originals missing on the primary drive; with remove_drive, remove it at the end."""
     source_dir = config.album_dir(topic, album)
     if not source_dir.is_dir():
         raise AlbumflowError(f"Album folder not found: {source_dir}")
     if dry_run:
         drive = find_backup_drive(drive)
         if drive is None:
-            log("The backup drive is not connected; the backup would wait for it.")
+            log("The primary drive is not connected; the backup would wait for it.")
             return
     else:
         drive = wait_for_backup_drive(drive, log)
@@ -163,7 +163,7 @@ def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool 
 
 
 def remove_backup_drive(path: Path, log=print) -> None:
-    """Safely remove the backup drive; failing is only a warning, the backup itself succeeded."""
+    """Safely remove the primary drive; failing is only a warning, the backup itself succeeded."""
     try:
         remove_device(Path(path.anchor))
         log(f"Removed {path.anchor}; it can be unplugged.")
@@ -180,7 +180,7 @@ class ParallelBackup:
     has arrived on the PC with arrived(), so the progress total also covers
     photos that are still on the card.
 
-    The backup drive may be connected later: the backup starts once it appears.
+    The primary drive may be connected later: the backup starts once it appears.
     on_drive(drive) is called then (e.g. to label a progress bar).
 
     An error stops only the backup; it is kept in .error, and the import goes on.
@@ -218,7 +218,7 @@ class ParallelBackup:
     def finish(self, abort: bool = False) -> Exception | None:
         """Tell the backup the import is over, wait until it is done, return its error if any.
 
-        If the backup drive isn't connected yet, this waits for it, unless abort.
+        If the primary drive isn't connected yet, this waits for it, unless abort.
         """
         if abort:
             self._abort.set()
@@ -270,13 +270,13 @@ class ParallelBackup:
             self.progress(self._done, self._done + max(left, 0), name)
 
 
-# --- update-secondary: the albums waiting on the backup drive, to the secondary backup drive ---
+# --- update-secondary: the albums waiting on the primary drive, to the secondary drive ---
 
 def find_secondary_drive() -> Path | None:
     """The drive with the secondary backup marker file; None if not connected."""
     found = [d for d in drives() if (d / config.SECONDARY_BACKUP_MARKER).is_file()]
     if len(found) > 1:
-        raise AlbumflowError(f"Several secondary backup drives found: {', '.join(str(d) for d in found)}")
+        raise AlbumflowError(f"Several secondary drives found: {', '.join(str(d) for d in found)}")
     return found[0] if found else None
 
 
@@ -286,13 +286,13 @@ def free_space(drive: Path) -> int:
 
 @dataclass
 class WaitingAlbum:
-    """An album not yet (completely) on the secondary: in the backup drive's BACKUP_DIR, or, for the
+    """An album not yet (completely) in a secondary backup: in the primary drive's BACKUP_DIR, or, for the
     cloud, also an album pending a backup, on the PC."""
     name: str  # <topic>\<album>
-    source: Path  # on the backup drive, in BACKUP_DIR (or the album folder on the PC)
-    copied: Path | None  # on the backup drive, in COPIED_DIR (None for an album on the PC)
-    dest: Path  # on the secondary backup drive, or in the cloud
-    todo: list[tuple[Path, Path]]  # (source, destination) of the files not yet on the secondary
+    source: Path  # on the primary drive, in BACKUP_DIR (or the album folder on the PC)
+    copied: Path | None  # on the primary drive, in COPIED_DIR (None for an album on the PC)
+    dest: Path  # on the secondary drive, or in the cloud
+    todo: list[tuple[Path, Path]]  # (source, destination) of the files not yet on the secondary drive or in the cloud
 
     @property
     def size(self) -> int:
@@ -305,7 +305,7 @@ def album_files(folder: Path) -> list[Path]:
 
 
 def waiting_albums(drive: Path, dest_root: Path) -> list[WaitingAlbum]:
-    """The albums waiting on the backup drive, with what dest_root\\<topic>\\<album> lacks of them."""
+    """The albums waiting on the primary drive, with what dest_root\\<topic>\\<album> lacks of them."""
     root = drive / config.BACKUP_DIR
     albums = []
     for source in sorted(root.glob("*/*")):
@@ -325,13 +325,13 @@ def waiting_albums(drive: Path, dest_root: Path) -> list[WaitingAlbum]:
 
 
 def move_to_copied(album: WaitingAlbum) -> None:
-    """Once every file of the album is on the secondary (checked by size), move it on the backup drive from
+    """Once every file of the album is on the secondary drive (checked by size), move it on the primary drive from
     BACKUP_DIR to COPIED_DIR, joining what an earlier update-secondary moved there."""
     files = album_files(album.source)
     for src in files:
         target = album.dest / src.relative_to(album.source)
         if not (target.is_file() and target.stat().st_size == src.stat().st_size):
-            raise AlbumflowError(f"{src} is not on the secondary backup drive as {target}")
+            raise AlbumflowError(f"{src} is not on the secondary drive as {target}")
     for src in files:
         target = album.copied / src.relative_to(album.source)
         if target.exists():
@@ -352,24 +352,24 @@ def move_to_copied(album: WaitingAlbum) -> None:
 
 def update_secondary(dry_run: bool = False, log=print, progress: Progress | None = None,
                      remove_drives: bool = False) -> None:
-    """Copy the albums waiting on the backup drive to the secondary backup drive, then move them on the
-    backup drive from BACKUP_DIR to COPIED_DIR. With remove_drives, remove both drives at the end."""
+    """Copy the albums waiting on the primary drive to the secondary drive, then move them on the
+    primary drive from BACKUP_DIR to COPIED_DIR. With remove_drives, remove both drives at the end."""
     drive, secondary = find_backup_drive(), find_secondary_drive()
     if drive is None:
-        raise AlbumflowError(f"The backup drive (with a {config.BACKUP_MARKER} file) is not connected")
+        raise AlbumflowError(f"The primary drive (with a {config.BACKUP_MARKER} file) is not connected")
     if secondary is None:
-        raise AlbumflowError(f"The secondary backup drive (with a {config.SECONDARY_BACKUP_MARKER} file) "
+        raise AlbumflowError(f"The secondary drive (with a {config.SECONDARY_BACKUP_MARKER} file) "
                              "is not connected")
     if drive == secondary:
-        raise AlbumflowError(f"{drive} has the markers of both the backup and the secondary backup drive")
+        raise AlbumflowError(f"{drive} has the markers of both the primary and the secondary drive")
     dest_root = secondary / config.SECONDARY_DIR
     albums = waiting_albums(drive, dest_root)
     if _check_space(albums, dest_root, free_space(secondary), log) and not dry_run:
         for album in _copy(albums, progress):
             move_to_copied(album)
-            log(f"  {album.name}: on the secondary, moved to {config.COPIED_DIR}")
-    # The cloud only stands in for the secondary: what is on the secondary now goes from there
-    delete_from_cloud(cloud_files_on(dest_root), "on the secondary now", dry_run, log)
+            log(f"  {album.name}: on the secondary drive, moved to {config.COPIED_DIR}")
+    # The cloud only stands in for the secondary drive: what is on it now goes from the cloud
+    delete_from_cloud(cloud_files_on(dest_root), "on the secondary drive now", dry_run, log)
     if remove_drives and not dry_run:
         remove_backup_drive(drive, log)
         remove_backup_drive(secondary, log)
@@ -423,9 +423,9 @@ def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> lis
     return [] if dry_run else files
 
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
-    """Copy what hasn't reached the secondary backup drive to CLOUD_PICTURES, which doubles for the
-    secondary while that is out of reach: the albums waiting on the backup drive, and the photos of albums
-    pending a backup, from the PC. The backup drive stays as it is.
+    """Copy what hasn't reached the secondary drive to CLOUD_PICTURES, which doubles for the
+    secondary while that is out of reach: the albums waiting on the primary drive, and the photos of albums
+    pending a backup, from the PC. The primary drive stays as it is.
 
     Kept photos (still in the new tree) come first. When space is short (CLOUD_RESERVE is always left free),
     rejected photos (no longer in the new tree) are deleted from the cloud, and copied only if there is room.
@@ -435,7 +435,7 @@ def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = N
     if not Path(cloud.anchor).exists():
         raise AlbumflowError(f"The cloud drive {cloud.anchor} is not available")
     if drive is None:
-        log("The backup drive is not connected: only the albums pending a backup are copied, from the PC.")
+        log("The primary drive is not connected: only the albums pending a backup are copied, from the PC.")
     kept, rejected = [], []  # (source, destination)
     for album in cloud_todo(drive):
         if where := safe_elsewhere(album):
@@ -503,13 +503,13 @@ def _copy_files(files: list[tuple[Path, Path]], progress: Progress | None) -> No
 
 
 def safe_elsewhere(album: WaitingAlbum) -> str | None:
-    """Where the album is safe though not on the secondary (config.SAFE_ELSEWHERE), for an album of
+    """Where the album is safe though in no secondary backup (config.SAFE_ELSEWHERE), for an album of
     cloud_todo; None if it isn't."""
     return config.SAFE_ELSEWHERE.get(str(album.dest.relative_to(config.CLOUD_PICTURES)))
 
 
 def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
-    """What the cloud lacks of the albums waiting on the backup drive (if connected), and of the photos of
+    """What the cloud lacks of the albums waiting on the primary drive (if connected), and of the photos of
     albums pending a backup, read from the PC."""
     cloud = config.CLOUD_PICTURES
     albums = waiting_albums(drive, cloud) if drive else []
@@ -519,7 +519,7 @@ def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
         for src in clock.photo_files(config.album_dir(topic, album)):
             corrected, _ = split_name(src.name)
             if corrected or (on_drive and (on_drive / src.name).is_file()):
-                continue  # clock-corrected only once its original is on the backup drive; or copied from there
+                continue  # clock-corrected only once its original is on the primary drive; or copied from there
             target = cloud / topic / album / src.name
             if not target.exists():
                 todo.append((src, target))
@@ -555,11 +555,11 @@ def _copy(albums: list[WaitingAlbum], progress: Progress | None):
         yield album
 
 
-# --- purging finished albums from the backup drives, to make room ---
+# --- purging finished albums from the primary and secondary drives, to make room ---
 
 @dataclass
 class Purgeable:
-    """A finished album on a backup drive: it is in ORIGINALS, which restic covers."""
+    """A finished album on a primary drive: it is in ORIGINALS, which restic covers."""
     name: str  # <topic>\<album>
     folder: Path
     size: int
@@ -568,14 +568,14 @@ class Purgeable:
 
 
 def purge_roots() -> list[tuple[str, Path]]:
-    """(description, folder of <topic>\\<album>) of the connected backup drives' album trees that may be
-    purged: on the backup drive only what is on the secondary too, on the secondary everything."""
+    """(description, folder of <topic>\\<album>) of the connected primary and secondary drives' album trees that may be
+    purged: on the primary drive only what is on the secondary drive too, on the secondary drive everything."""
     roots = []
     drive, secondary = find_backup_drive(), find_secondary_drive()
     if drive:
-        roots.append((f"the backup drive {drive}", drive / config.COPIED_DIR))
+        roots.append((f"the primary drive {drive}", drive / config.COPIED_DIR))
     if secondary:
-        roots.append((f"the secondary backup drive {secondary}", secondary / config.SECONDARY_DIR))
+        roots.append((f"the secondary drive {secondary}", secondary / config.SECONDARY_DIR))
     return roots
 
 

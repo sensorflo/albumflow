@@ -8,7 +8,7 @@ camera's clock would have shown when it was taken.
 Only photos that would otherwise be out of order are corrected: their capture
 time (in the file) becomes their master time, and they are renamed to
 <master time>-<import name>. The master's photos are never changed. A photo is
-only corrected once its original is on the backup drive, which keeps the
+only corrected once its original is on the primary drive, which keeps the
 originals (import name and content).
 """
 
@@ -68,7 +68,7 @@ class AlbumState:
         # cameras without a clock reading, treated as in sync with the master (or, for
         # the master, as showing the right time)
         self.assumed: list[str] = data.get("assume_in_sync", [])
-        # photos were imported that may not be on the backup drive yet (cleared by a complete backup)
+        # photos were imported that may not be on the primary drive yet (cleared by a complete backup)
         self.backup_pending: bool = data.get("backup_pending", False)
 
     def save(self) -> None:
@@ -298,7 +298,7 @@ def apply(album_dir: Path, backup_dirs: list[Path], log=print, confirm=None, dry
 
     Only when every camera of the album has a clock reading (or is assumed in
     sync); until then the corrections are paused. backup_dirs are the folders
-    on the backup drive that may hold the album's originals (none: not
+    on the primary drive that may hold the album's originals (none: not
     connected, so nothing can be corrected yet). confirm(text) -> bool may veto.
     """
     state = AlbumState(album_dir)
@@ -324,7 +324,7 @@ def apply(album_dir: Path, backup_dirs: list[Path], log=print, confirm=None, dry
             by_camera[model(shot.camera)] = by_camera.get(model(shot.camera), 0) + 1
         summary = ", ".join(f"{n} of {cam}" for cam, n in sorted(by_camera.items()))
         if waiting:
-            log(f"Clock correction: {waiting} photos wait until their originals are on the backup drive.")
+            log(f"Clock correction: {waiting} photos wait until their originals are on the primary drive.")
         if not ready:
             return 0
         if dry_run:

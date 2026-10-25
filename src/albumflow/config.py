@@ -11,7 +11,7 @@ PICTURES_NEW_OLD = PICTURES_NEW.parent / "new-old"
 # A sub-topic, not a topic: <PICTURES_NEW>\<ONLY_FOR_OTHERS>\<album> holds the photos of a finished album
 # kept only for others (tagged NotForPublic/OnlyForOthers), as long as I want to spend the space.
 ONLY_FOR_OTHERS = "OnlyForOthers"
-# Finished albums: <ORIGINALS>\<topic>\<album>. restic backs them up, so the backup drives may drop them.
+# Finished albums: <ORIGINALS>\<topic>\<album>. restic backs them up, so the primary and secondary drives may drop them.
 ORIGINALS = Path(os.environ.get("ALBUMFLOW_ORIGINALS", r"C:\Users\senso\Large\Pictures\Originals"))
 
 # Album folders matching any of these (re.search on the folder name, ignoring case) are never
@@ -24,17 +24,17 @@ EXCLUDED_ALBUM_PATTERNS = [
 # Files imported from the camera card
 CAMERA_SUFFIXES = {".arw", ".jpg", ".jpeg"}
 
-# Marker files in the root of the (primary) backup drive and of the secondary one. The backup tool
+# Marker files in the root of the primary drive and of the secondary one. The backup tool
 # (~/src/backup) uses the same markers; it owns the restic repos on these drives, albumflow the album raws.
 BACKUP_MARKER = ".backup-destination"
 SECONDARY_BACKUP_MARKER = ".secondary-backup-destination"
-# On the backup drive, an album's raw originals go to <BACKUP_DIR>\<topic>\<album>, mirroring PICTURES_NEW.
-# update-secondary copies them to <SECONDARY_DIR>\<topic>\<album> on the secondary backup drive, then moves
-# them on the backup drive to COPIED_DIR.
+# On the primary drive, an album's raw originals go to <BACKUP_DIR>\<topic>\<album>, mirroring PICTURES_NEW.
+# update-secondary copies them to <SECONDARY_DIR>\<topic>\<album> on the secondary drive, then moves
+# them on the primary drive to COPIED_DIR.
 BACKUP_DIR = r"Backup\pictures-new\to-secondary"
 COPIED_DIR = r"Backup\pictures-new\copied-to-secondary"
 SECONDARY_DIR = r"Backup\pictures-new"
-# While the secondary backup drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
+# While the secondary drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))
 # The local folder of Google Drive's "My Drive" (Google Drive for desktop), containing CLOUD_PICTURES: deleting
@@ -42,7 +42,7 @@ CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\B
 CLOUD_MY_DRIVE = Path(r"G:\My Drive")
 # update-cloud always leaves this much free in the cloud, for its other uses
 CLOUD_RESERVE = 2 * 10**9
-# Albums not on the secondary backup drive yet, but safe elsewhere: update-cloud doesn't copy them to the
+# Albums not on the secondary drive yet, but safe elsewhere: update-cloud doesn't copy them to the
 # cloud, backup-status names where they are. <topic>\<album> -> where. Remove an entry once the album is
 # on the secondary (from then on it doesn't matter anyway). Card pruning ignores this: it may be the very
 # card named here.

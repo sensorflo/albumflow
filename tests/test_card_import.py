@@ -183,7 +183,7 @@ def test_backup_drive_connected_later(setup, monkeypatch):
                                   on_backup_drive=found.append)
     assert found == [ssd]
     assert len(list((ssd / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
-    assert any(line.startswith("Waiting for the backup drive") for line in lines)
+    assert any(line.startswith("Waiting for the primary drive") for line in lines)
 
 
 def test_imports_several_cards_one_after_the_other(setup, monkeypatch):

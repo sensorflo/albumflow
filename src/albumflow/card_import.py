@@ -263,7 +263,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
                       on_card_done: Callable[[Path], None] | None = None) -> list[ImportItem]:
     """import_only, with backup_new running in parallel.
 
-    The backup drive may be connected later; the backup starts when it appears,
+    The primary drive may be connected later; the backup starts when it appears,
     and at the end this waits for it if needed. If the backup fails midway, the
     import still goes on; the backup error is raised at the end.
     """
