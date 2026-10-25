@@ -956,7 +956,9 @@ class _HelpFormatter(argparse.HelpFormatter):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="albumflow", formatter_class=_HelpFormatter,
-                                     epilog="albumflow <command> -h shows the options of a command.")
+                                     epilog="albumflow <command> -h shows the options of a command. An overview of "
+                                            "albumflow and the backup tool, with what goes where: the Google "
+                                            "Drawing \"backup & albumflow\".")
     parser._positionals.title = "commands"  # instead of "positional arguments", listed before the options
     sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
 
