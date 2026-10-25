@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, gphotos_api,
-                       gphotos_sync, lightroom)
+                       gphotos_sync, lightroom, purge)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -270,8 +270,8 @@ def parse_selection(answer: str, count: int) -> list[int] | None:
 def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = False) -> None:
     """If the card is fuller than allowed, offer to delete old folders in its Backup folder.
 
-    A folder is only deleted once it is safe, i.e. all its files are in a secondary backup (on the secondary drive or
-    in the cloud) (see backup.secondary_backup_dirs_named); with force, also before.
+    A folder is only deleted under purge's rule for cards: once all its files are in a secondary backup (on
+    the secondary drive or in the cloud), or the album is finished (in Originals); with force, also before.
     """
     free = card_import.free_fraction(card)
     if free >= config.CARD_MIN_FREE:
@@ -290,9 +290,12 @@ def offer_pruning(card: Path, album: str, log=print, ask=input, force: bool = Fa
         f"Old backups on the card, oldest first:")
     unsafe = set()
     for i, old in enumerate(olds, 1):
-        missing = card_import.missing_on(old, safe_dirs[old.path.name])
+        missing = card_import.missing_on(old, safe_dirs[old.path.name],
+                                         backup.on_secondary_drive(ssd, None, old.path.name))
         if not missing:
             status = "safe: in a secondary backup"
+        elif purge.is_finished(None, old.path.name):
+            status = "safe: finished (in Originals)"
         else:
             unsafe.add(i)
             status = f"{missing} of {len(old.files)} files not yet in a secondary backup"
@@ -825,7 +828,8 @@ def cmd_backup_new(args) -> int:
     for album in album_candidates(""):
         source = config.album_dir(album.topic, album.name)
         if backup.missing_on_backup(source, backup.backup_dir(drive, album.topic, album.name),
-                                    [backup.copied_dir(drive, album.topic, album.name)]):
+                                    [backup.copied_dir(drive, album.topic, album.name)],
+                                    backup.on_secondary_drive(drive, album.topic, album.name)):
             albums.append(album)
     display.log(f"{len(albums)} albums with originals not yet on the primary drive"
                 + (": " + ", ".join(map(str, albums)) if albums else "."))
@@ -867,7 +871,8 @@ def cmd_backup_status(args) -> int:
             source = config.album_dir(album.topic, album.name)
             try:
                 todo = backup.missing_on_backup(source, backup.backup_dir(drive, album.topic, album.name),
-                                                [backup.copied_dir(drive, album.topic, album.name)])
+                                                [backup.copied_dir(drive, album.topic, album.name)],
+                                                backup.on_secondary_drive(drive, album.topic, album.name))
             except AlbumflowError as e:
                 lines.append(f"  {album}: {e}")
                 continue
@@ -894,36 +899,49 @@ def cmd_backup_status(args) -> int:
     return 0
 
 
-def cmd_purge_backup(args, ask=input) -> int:
-    roots = backup.purge_roots()
-    if not roots:
-        raise AlbumflowError("Neither the primary nor the secondary drive is connected")
-    for description, root in roots:
-        candidates = backup.purgeable(root)
-        usage = shutil.disk_usage(root.anchor)
-        print(f"\nFinished albums (in {config.ORIGINALS}) on {description} "
-              f"({usage.free / 1e9:.0f} GB, {usage.free / usage.total:.0%} free):")
+PURGE_PLACES = purge.PLACES
+
+
+def cmd_purge(args, ask=input) -> int:
+    available = purge.places()
+    wanted = args.place or [place for place, _, _ in available]
+    for place in wanted:
+        if place not in [p for p, _, _ in available]:
+            raise AlbumflowError(f"{place}: not available now (no card inserted, or the drive isn't connected)")
+    for place, description, candidates in available:
+        if place not in wanted:
+            continue
+        anchor = annex.home().anchor if place == "rejected" else candidates[0].root.anchor if candidates else None
+        free = f" ({shutil.disk_usage(anchor).free / 1e9:.0f} GB free)" if anchor else ""
+        print(f"\n{place}: {description}{free}")
         if not candidates:
-            print("  none")
+            print("  nothing to purge")
             continue
         print(f"{'':>2} {'GB':>4}  {'idle':<9}  album")
         for i, c in enumerate(candidates, 1):
-            print(f"{i:>2} {c.size / 1e9:4.0f}  {ago(c.newest):<9}  {c.name}")
-        answer = ask("Delete which? (e.g. 1 3 or 1-4; Enter: none): ")
+            note = f"  (not yet: {c.blocked}{'; --force purges it anyway' if not args.force else ''})" if c.blocked else ""
+            print(f"{i:>2} {c.size / 1e9:4.0f}  {ago(c.newest):<9}  {c.name}{note}")
+        answer = ask("Purge which? (e.g. 1 3 or 1-4; Enter: none): ")
         selection = parse_selection(answer, len(candidates))
         if selection is None:
-            print(f"Not understood: {answer!r}; nothing deleted.")
+            print(f"Not understood: {answer!r}; nothing purged.")
             continue
-        if not selection:
+        chosen = []
+        for i in selection:
+            if candidates[i - 1].blocked and not args.force:
+                print(f"  skipped {candidates[i - 1].name}: {candidates[i - 1].blocked}")
+            else:
+                chosen.append(candidates[i - 1])
+        if not chosen:
             continue
-        chosen = [candidates[i - 1] for i in selection]
         size = sum(c.size for c in chosen)
-        if ask(f"Type delete to delete {len(chosen)} albums ({size / 1e9:.0f} GB) from {description}: ").strip() != "delete":
-            print("Nothing deleted.")
+        how = "to C:'s Recycle Bin" if place == "rejected" and not args.permanent else "permanently"
+        if ask(f"Type delete to delete {len(chosen)} albums ({size / 1e9:.0f} GB) {how}: ").strip() != "delete":
+            print("Nothing purged.")
             continue
         for c in chosen:
-            backup.purge(c, root)
-            print(f"  deleted {c.name}")
+            purge.delete(c, place, args.permanent, log=print)
+            print(f"  purged {c.name}")
     return 0
 
 
@@ -1021,19 +1039,27 @@ def build_parser() -> argparse.ArgumentParser:
                                              "isn't in a secondary backup yet")
     p.set_defaults(func=cmd_backup_status)
 
-    p = add_command("purge-backup", help="delete finished albums (those in Originals) from the connected "
-                                         "backup drives, to make room; you choose, then confirm by typing 'delete'",
-                    description="Delete finished albums from the connected primary and secondary drives, to make room. An album "
-                                "is finished once it is in Originals (also when moved to the annex): restic backs "
-                                "up what was kept of it. Offered per drive, the primary drive first: on the backup "
-                                "drive only the albums in copied-to-secondary (what waits in to-secondary must "
-                                "reach the secondary first), on the secondary all of its pictures-new. Listed with "
-                                "size and how long untouched, large and old first. Choose by number (e.g. 1 3 or "
-                                "1-4; Enter: none), then type 'delete' to confirm. Deleting loses the photos kept "
-                                "nowhere else: the rejected ones, and those in new\\OnlyForOthers, which then exist "
-                                "only on the laptop. The cloud and the SD cards aren't touched. No other command "
-                                "runs this one.")
-    p.set_defaults(func=cmd_purge_backup)
+    p = add_command("purge", help="delete albums from where they are no longer needed, to make room: cards, "
+                                  "Rejected, the primary and the secondary drive; you choose, then type 'delete'",
+                    description="Delete albums from where they are no longer needed, to make room. Each place has "
+                                "its rule: card (<card>\\Backup\\<album>) and rejected (Rejected\\<topic>\\<album>, "
+                                "the C: folder and its annex part): once all its photos are in a secondary backup "
+                                "(on the secondary drive or in the cloud), or the album is finished; primary (the "
+                                "primary drive's copied-to-secondary): always, it is on the secondary drive; "
+                                "secondary (the secondary drive's pictures-new): once the album is finished. "
+                                "Finished means in Originals (also when moved to the annex): restic backs up what "
+                                "was kept. Without a place, all available ones, in that order. Listed with size and "
+                                "how long untouched, large and old first; albums the rule doesn't allow yet are "
+                                "listed with the reason. Choose by number (e.g. 1 3 or 1-4; Enter: none), then type "
+                                "'delete'. Rejected albums go to C:'s Recycle Bin (their annex part is moved back to "
+                                "C: first, since S: has none); everything else is deleted permanently. No other "
+                                "command runs this one.")
+    p.add_argument("place", nargs="*", choices=PURGE_PLACES, metavar="place",
+                   help=f"where to purge: {', '.join(PURGE_PLACES)} (none: all available)")
+    p.add_argument("--force", action="store_true", help="also albums the place's rule doesn't allow yet")
+    p.add_argument("--permanent", action="store_true",
+                   help="rejected albums too are deleted permanently (in place), not to the Recycle Bin")
+    p.set_defaults(func=cmd_purge)
 
     p = add_command("sync-clocks", aliases=["sc"],
                        help="record clock readings; correct photos so all cameras' photos are in order")

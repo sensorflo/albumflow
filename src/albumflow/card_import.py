@@ -327,7 +327,9 @@ def old_backups(card: Path, album: str) -> list[OldBackup]:
     return sorted(found, key=lambda b: b.mtime)
 
 
-def missing_on(backup: OldBackup, folders: list[Path]) -> int:
-    """How many of the old backup's files are in none of the folders (by name and size)."""
+def missing_on(backup: OldBackup, folders: list[Path], known: dict[str, int] | None = None) -> int:
+    """How many of the old backup's files are in none of the folders, nor in known (name -> size)."""
+    known = known or {}
     return sum(1 for name, size in backup.files.items()
-               if not any((folder / name).is_file() and (folder / name).stat().st_size == size for folder in folders))
+               if known.get(name) != size
+               and not any((folder / name).is_file() and (folder / name).stat().st_size == size for folder in folders))

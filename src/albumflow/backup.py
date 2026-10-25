@@ -8,15 +8,13 @@ by hand.
 
 from __future__ import annotations
 
-import math
 import shutil
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from albumflow import annex, config, gdrive
+from albumflow import annex, config, gdrive, index
 from albumflow import clock
 from albumflow.clock import split_name
 from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, poll_until, remove_device
@@ -102,15 +100,30 @@ def secondary_backup_dirs_named(album: str) -> list[Path]:
     return [folder for root in roots for folder in sorted(root.glob(f"*/{album}")) if folder.is_dir()]
 
 
+def on_secondary_drive(drive: Path | None, topic: str | None, album: str) -> dict[str, int]:
+    """name -> size of the album's photos on the secondary drive (topic None: in any topic): looked at if it is
+    connected, else as of the primary drive's index (its last scan); empty if neither drive is connected."""
+    secondary = find_secondary_drive()
+    if secondary:
+        root = secondary / config.SECONDARY_DIR
+        folders = [root / topic / album] if topic else sorted(root.glob(f"*/{album}"))
+        return {p.name: p.stat().st_size for f in folders if f.is_dir() for p in f.rglob("*")
+                if p.is_file() and p.suffix != ".part"}
+    return index.on_secondary(drive, topic, album) if drive else {}
+
+
 def on_backup(dirs: list[Path], name: str) -> Path | None:
     """The file name in the first of dirs that has it, None if none has."""
     return next((d / name for d in dirs if (d / name).is_file()), None)
 
 
-def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = ()) -> list[tuple[Path, Path]]:
+def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = (),
+                      on_secondary: dict[str, int] | None = None) -> list[tuple[Path, Path]]:
     """(source, destination in dest_dir) of every original in source_dir not yet on the backup, i.e. in
-    neither dest_dir nor the folders in also."""
+    neither dest_dir nor the folders in also, nor on the secondary drive (on_secondary: name -> size, see
+    on_secondary_drive; e.g. after the album was purged from the primary drive's copied-to-secondary)."""
     dirs = [dest_dir, *also]
+    on_secondary = on_secondary or {}
     todo = []
     for src in sorted(source_dir.iterdir()):
         if not (src.is_file() and src.suffix.lower() in config.CAMERA_SUFFIXES):
@@ -118,13 +131,14 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = ()) -
         corrected, import_name = split_name(src.name)
         if corrected:
             # Clock-corrected on the PC; the backup keeps the original under its import name.
-            if not on_backup(dirs, import_name):
+            if not on_backup(dirs, import_name) and import_name not in on_secondary:
                 raise AlbumflowError(f"{src.name} was clock-corrected, but its original {import_name} "
                                      f"is not on the primary drive")
             continue
         dest = on_backup(dirs, src.name)
         if dest is None:
-            todo.append((src, dest_dir / src.name))
+            if on_secondary.get(src.name) != src.stat().st_size:
+                todo.append((src, dest_dir / src.name))
         # Comparing sizes keeps re-runs fast; a partly written copy never has the final name.
         elif src.stat().st_size != dest.stat().st_size:
             raise AlbumflowError(f"{dest} already exists with a different size than {src}")
@@ -146,7 +160,8 @@ def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool 
         drive = wait_for_backup_drive(drive, log)
     dest_dir = backup_dir(drive, topic, album)
 
-    todo = missing_on_backup(source_dir, dest_dir, [copied_dir(drive, topic, album)])
+    todo = missing_on_backup(source_dir, dest_dir, [copied_dir(drive, topic, album)],
+                             on_secondary_drive(drive, topic, album))
     log(f"{len(todo)} originals in {source_dir} to back up to {dest_dir}")
     if dry_run:
         for src, _ in todo:
@@ -237,6 +252,7 @@ class ParallelBackup:
             if self.drive is None:
                 return  # import failed before the drive was connected
             self.dest_dir = backup_dir(self.drive, self.topic, self.album)
+            on_secondary = on_secondary_drive(self.drive, self.topic, self.album)
             if self.on_drive:
                 self.on_drive(self.drive)
             while True:
@@ -247,7 +263,8 @@ class ParallelBackup:
                 # are counted as still on the card until the next scan.
                 still_on_card = self._still_on_card()
                 copied = [copied_dir(self.drive, self.topic, self.album)]
-                todo = missing_on_backup(self.source_dir, self.dest_dir, copied) if self.source_dir.is_dir() else []
+                todo = missing_on_backup(self.source_dir, self.dest_dir, copied, on_secondary) \
+                    if self.source_dir.is_dir() else []
                 remaining = sum(src.stat().st_size for src, _ in todo)
                 for src, dest in todo:
                     self._report(remaining + still_on_card, src.name)
@@ -370,6 +387,8 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
             log(f"  {album.name}: on the secondary drive, moved to {config.COPIED_DIR}")
     # The cloud only stands in for the secondary drive: what is on it now goes from the cloud
     delete_from_cloud(cloud_files_on(dest_root), "on the secondary drive now", dry_run, log)
+    if not dry_run:
+        index.record_secondary(drive, secondary)
     if remove_drives and not dry_run:
         remove_backup_drive(drive, log)
         remove_backup_drive(secondary, log)
@@ -553,54 +572,3 @@ def _copy(albums: list[WaitingAlbum], progress: Progress | None):
             counter.start(src.name)
             copy_file(src, dest, counter.add)
         yield album
-
-
-# --- purging finished albums from the primary and secondary drives, to make room ---
-
-@dataclass
-class Purgeable:
-    """A finished album on a primary drive: it is in ORIGINALS, which restic covers."""
-    name: str  # <topic>\<album>
-    folder: Path
-    size: int
-    newest: float  # modification time of its newest file
-    score: float  # size, weighted by age, like the annex suggestions
-
-
-def purge_roots() -> list[tuple[str, Path]]:
-    """(description, folder of <topic>\\<album>) of the connected primary and secondary drives' album trees that may be
-    purged: on the primary drive only what is on the secondary drive too, on the secondary drive everything."""
-    roots = []
-    drive, secondary = find_backup_drive(), find_secondary_drive()
-    if drive:
-        roots.append((f"the primary drive {drive}", drive / config.COPIED_DIR))
-    if secondary:
-        roots.append((f"the secondary drive {secondary}", secondary / config.SECONDARY_DIR))
-    return roots
-
-
-def is_finished(topic: str, album: str) -> bool:
-    """Whether the album is in ORIGINALS, also if moved to the annex."""
-    folder = config.ORIGINALS / topic / album
-    return folder.is_dir() or annex.link_of(folder).exists()
-
-
-def purgeable(root: Path, now: float | None = None) -> list[Purgeable]:
-    """The finished albums below root, highest score first."""
-    now = time.time() if now is None else now
-    found = []
-    for folder in sorted(root.glob("*/*")):
-        if not folder.is_dir() or annex.is_link(folder) or not is_finished(folder.parent.name, folder.name):
-            continue
-        files = [p.stat() for p in folder.rglob("*") if p.is_file()]
-        size, newest = sum(s.st_size for s in files), max((s.st_mtime for s in files), default=0.0)
-        age = max(0.0, (now - newest) / 86400)
-        score = size / 1e9 * (1 - math.exp(-age / config.ANNEX_AGE_DAYS))
-        found.append(Purgeable(str(folder.relative_to(root)), folder, size, newest, score))
-    return sorted(found, key=lambda p: p.score, reverse=True)
-
-
-def purge(album: Purgeable, root: Path) -> None:
-    annex.delete_tree(album.folder, root)
-    if not any(album.folder.parent.iterdir()):
-        album.folder.parent.rmdir()  # the topic folder

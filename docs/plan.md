@@ -411,25 +411,32 @@ So:
   too); (2) `update-cloud`, run by backup (done); (3) purging (done); (4) refusing
   `OnlyForOthers` (done).
 
-## Purging albums from the backup drives
+## Purging albums
 
-Both drives are always more or less full, so finished albums have to go.
+Decided 2026-10-25: `albumflow purge [card | rejected | primary | secondary] [--force] [--permanent]`
+(was `purge-backup`). Without a place, all available ones, in that order. Each place has its rule:
 
-- An album `<topic>\<album>` may be purged from a drive only if
-  `Originals\<topic>\<album>` exists on the laptop (the album is finished,
-  restic covers what was kept).
-- Accepted loss: the drives hold the complete import, so afterwards the raws
-  in `new\OnlyForOthers\<album>` exist only on the laptop (restic excludes
-  `new`), and the culled ones nowhere.
-- Hard to do by accident, but no extra information: only an explicit purge
-  command, never part of another command, no `--yes`. It lists the finished
-  albums on the drive (largest and oldest first, with size and date); the
-  chosen ones are deleted after typing `delete`.
-- Done: `albumflow purge-backup`, for each connected drive in turn. On the
-  primary only `copied-to-secondary` is offered (what waits in
-  `to-secondary` must reach the secondary first), on the secondary all of
-  `pictures-new`. Order: size weighted by age, as for the annex. An album in
-  `Originals` that is in the annex counts as finished too.
+| Place | What | Rule | Deleting |
+|---|---|---|---|
+| card | `<card>\Backup\<album>` | all its photos in a secondary backup, or finished | permanent |
+| rejected | `Rejected\<topic>\<album>`, the C: folder and its annex part, link included | all its photos in a secondary backup, or finished | C:'s Recycle Bin; `--permanent`: in place |
+| primary | the primary drive's `copied-to-secondary` | always (it is on the secondary drive), unless clock corrections are pending | permanent |
+| secondary | the secondary drive's `pictures-new` | finished | permanent |
+
+- Finished: in `Originals` (also when moved to the annex); restic backs up what was kept.
+- S: (the microSD) is a removable drive, which has no Recycle Bin: a rejected album's annex part is moved
+  back to C: first (file by file, crash-safe), then the whole folder goes to C:'s Recycle Bin.
+- Hard to do by accident: only this command, never part of another one; list (large and old first, with
+  size and how long untouched; albums the rule doesn't allow yet with the reason), choose by number, type
+  `delete`. `--force` also offers what the rule doesn't allow yet.
+- `import` offers card pruning when the card is full, with the same rule (`--force-prune`).
+- Accepted loss: the drives hold the complete import, so purging loses the rejected photos, and those in
+  `new\OnlyForOthers\<album>` then exist only on the laptop.
+- The primary drive's index (`Backup\pictures-new\index.json`, see `index.py`) keeps what is on the
+  secondary drive, scanned by `update-secondary` and `purge secondary`. Without the secondary drive
+  connected, "is this photo on the secondary drive?" asks the index: so after purging an unfinished album
+  from `copied-to-secondary`, `backup-new` doesn't copy it to the primary drive again, and card and
+  rejected purging know it is in a secondary backup.
 
 ## OnlyForOthers
 
@@ -485,11 +492,6 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
   same tree as everywhere else, `Backup\<topic>\<album>`, not just
   `Backup\<album>` as the import writes it now. Affects the import, card
   pruning (`old_backups`, matching by name), and the existing card folders.
-- The primary knows what reached the secondary only as long as albums stay
-  in `copied-to-secondary` while unfinished: `purge-backup` only offers
-  finished albums, but a folder deleted there by hand (or an album copied to
-  the secondary by hand, as before albumflow) leaves no trace, and
-  `backup-status` then reports its photos as not on the backup drive.
 - Rejected photos (done, 2026-10-25): `Rejected\<topic>\<album>`, mirrored
   in the annex. While culling they're moved to the C: folder, for speed;
   `to-annex` on a folder below `Rejected` moves only its files into the

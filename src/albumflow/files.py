@@ -264,3 +264,23 @@ class ByteCounter:
         self.done += n
         if self.progress:
             self.progress(self.done, self.total, self.name)
+
+
+class _ShFileOp(ctypes.Structure):  # SHFILEOPSTRUCTW
+    _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+                ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+
+def recycle(path: Path) -> None:
+    """Move path to its drive's Recycle Bin. Only on fixed drives: on others (e.g. a removable one, like a
+    card) Windows would delete it permanently instead, so that is refused."""
+    DRIVE_FIXED = 3
+    if ctypes.windll.kernel32.GetDriveTypeW(Path(path).anchor) != DRIVE_FIXED:
+        raise AlbumflowError(f"{Path(path).anchor} has no Recycle Bin: not deleting {path}")
+    FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+    op = _ShFileOp(None, FO_DELETE, str(Path(os.path.abspath(path))) + "\0", None,
+                   FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI, False, None, None)
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    if result or op.fAnyOperationsAborted or os.path.lexists(path):
+        raise AlbumflowError(f"Could not move {path} to the Recycle Bin (error {result})")
