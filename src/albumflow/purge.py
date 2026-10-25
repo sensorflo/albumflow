@@ -124,7 +124,8 @@ def corrections_pending(topic: str, album: str) -> bool:
     return bool(clock.plan(clock.load_shots(album_dir, state, log=lambda *_: None)))
 
 
-def drive_candidates(root: Path, finished_only: bool) -> list[Candidate]:
+def drive_candidates(root: Path, finished_only: bool, drive: Path | None = None) -> list[Candidate]:
+    """The albums below root; finished_only: on the secondary drive, else on the primary drive (drive)."""
     found = []
     for folder in sorted(root.glob("*/*")) if root.is_dir() else []:
         if not folder.is_dir() or annex.is_link(folder):
@@ -135,6 +136,12 @@ def drive_candidates(root: Path, finished_only: bool) -> list[Candidate]:
             blocked = "not finished yet (not in Originals)"
         elif not finished_only and corrections_pending(folder.parent.name, folder.name):
             blocked = "clock corrections pending, which need the originals here"
+        elif not finished_only and not is_finished(folder.parent.name, folder.name):
+            # Afterwards only the secondary drive (or the primary drive's index of it) knows the photos are there
+            known = backup.on_secondary_drive(drive, folder.parent.name, folder.name)
+            if missing := sum(1 for name, size in files.items() if known.get(name) != size):
+                blocked = (f"{missing} of {len(files)} photos not in the index of the secondary drive yet "
+                           "(update-secondary scans it)")
         found.append(Candidate(str(folder.relative_to(root)), [folder], root, files, newest, blocked))
     return found
 
@@ -148,7 +155,7 @@ def places() -> list[tuple[str, str, list[Candidate]]]:
     drive, secondary = backup.find_backup_drive(), backup.find_secondary_drive()
     if drive:
         found.append(("primary", f"the primary drive {drive} ({config.COPIED_DIR})",
-                      drive_candidates(drive / config.COPIED_DIR, finished_only=False)))
+                      drive_candidates(drive / config.COPIED_DIR, finished_only=False, drive=drive)))
     if secondary:
         found.append(("secondary", f"the secondary drive {secondary} ({config.SECONDARY_DIR})",
                       drive_candidates(secondary / config.SECONDARY_DIR, finished_only=True)))

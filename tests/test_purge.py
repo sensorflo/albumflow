@@ -171,3 +171,12 @@ def test_primary_blocked_while_clock_corrections_are_pending(world, monkeypatch)
     album(world["primary"] / config.COPIED_DIR, r"party\fest")
     monkeypatch.setattr(purge, "corrections_pending", lambda topic, album: (topic, album) == ("party", "fest"))
     assert candidates("primary") == {r"party\fest": "clock corrections pending, which need the originals here"}
+
+
+def test_primary_needs_the_index_for_an_unfinished_album(world, monkeypatch):
+    album(world["primary"] / config.COPIED_DIR, r"party\fest", ["1.ARW", "2.ARW"])
+    monkeypatch.setattr(backup, "drives", lambda: [world["primary"]])  # no secondary drive, no index yet
+    assert candidates("primary") == {
+        r"party\fest": "2 of 2 photos not in the index of the secondary drive yet (update-secondary scans it)"}
+    finish(r"party\fest")
+    assert candidates("primary") == {r"party\fest": None}  # finished: Originals answers instead
