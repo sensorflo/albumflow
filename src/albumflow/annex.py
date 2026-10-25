@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from albumflow import config
-from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives
+from albumflow.files import AlbumflowError, ByteCounter, Progress, copy_file, drives, same_content
 
 MOVE_NOTE = ".albumflow-move.json"
 PART = ".part"
@@ -215,8 +215,100 @@ def check_space(src: Path, dest_drive: Path) -> None:
 
 # --- moving ---
 
+def in_rejected_tree(folder: Path) -> bool:
+    """Whether folder is below config.REJECTED_TREE: there, a folder is a drop target while culling (e.g. in
+    FastRawViewer), so moving it to the annex moves its files but keeps the folder."""
+    try:
+        parts = [p.lower() for p in relative(folder).parts]
+    except AlbumflowError:
+        return False
+    tree = [p.lower() for p in Path(config.REJECTED_TREE).parts]
+    return len(parts) > len(tree) and parts[:len(tree)] == tree
+
+
+def merge_into_annex(folder: Path, keep_folder: bool, log=print, progress: Progress | None = None,
+                     dry_run: bool = False) -> Path:
+    """Move folder's files into its annex folder, which may already hold others (created with its link if
+    not). Crash-safe per file: copied (as .part, then renamed), then deleted here; a file already in the
+    annex with the same content is only deleted here, one with other content stops it. Afterwards the empty
+    folder stays (keep_folder) or goes. Returns the annex folder."""
+    folder = Path(os.path.abspath(folder))
+    annex = require_annex()
+    target = annex / relative(folder)
+    link = link_of(folder)
+    if is_link(folder) or not folder.is_dir():
+        raise AlbumflowError(f"{folder} is not a folder")
+    if inside := junctions_inside(folder):
+        raise AlbumflowError(f"{folder} contains a junction ({inside[0]}); move that one back first")
+    if is_link(link) and not same_path(link_target(link), target):
+        raise AlbumflowError(f"{link} points to {link_target(link)}, not to {target}")
+    if link.exists() and not is_link(link):
+        raise AlbumflowError(f"{link} exists, but isn't a link")
+    files = files_of(folder)
+    for rel in files:
+        if (target / rel).is_file() and not same_content(folder / rel, target / rel):
+            raise AlbumflowError(f"{target / rel} already exists in the annex with other content; please check "
+                                 "by hand")
+    check_space(folder, annex)
+    check_no_editors()
+    size = sum(files.values())
+    log(f"Moving {len(files)} files ({size / 1e9:.1f} GB) of {folder} into {target}")
+    if dry_run:
+        return target
+    target.mkdir(parents=True, exist_ok=True)
+    counter = ByteCounter(size, progress)
+    for rel, file_size in sorted(files.items()):
+        src, dest = folder / rel, target / rel
+        counter.start(rel.name)
+        if not dest.is_file():
+            copy_file(src, dest)
+            if dest.stat().st_size != file_size:
+                raise AlbumflowError(f"The copy {dest} doesn't match {src}; it wasn't deleted")
+        src.unlink()
+        counter.add(file_size)
+    for sub in sorted((p for p in folder.rglob("*") if p.is_dir()), reverse=True):
+        sub.rmdir()  # empty now; rglob doesn't follow junctions, and there are none inside
+    if not keep_folder:
+        folder.rmdir()
+    if not link.exists():
+        create_link(link, target)
+    log(f"Done: the files are in the annex; {link.name} stands for them"
+        + (f", {folder.name} stays (empty)." if keep_folder else "."))
+    return target
+
+
 def to_annex(folder: Path, log=print, progress: Progress | None = None, dry_run: bool = False) -> Path:
-    """Move folder (inside the home folder) to the annex; returns the annex copy."""
+    """Move folder (inside the home folder) to the annex; returns the annex copy.
+
+    Below config.REJECTED_TREE, only its files move and the folder stays (merge_into_annex). Elsewhere the
+    whole folder moves, leaving a link; if the annex already has the folder (with its link), the files are
+    merged into it and the folder goes.
+    """
+    folder = Path(os.path.abspath(folder))
+    if folder.is_dir() and not is_link(folder):
+        if in_rejected_tree(folder):
+            return merge_into_annex(folder, True, log, progress, dry_run)
+        target = require_annex() / relative(folder)
+        if is_link(link_of(folder)) and target.is_dir() and not has_note(target):
+            return merge_into_annex(folder, False, log, progress, dry_run)
+    return move_to_annex(folder, log, progress, dry_run)
+
+
+def rejected_to_drain() -> list[Path]:
+    """The folders below config.REJECTED_TREE that have files on C: (not in the annex yet)."""
+    root = home() / config.REJECTED_TREE
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root) if root.is_dir() else []:
+        path = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if not is_link(path / d) and not d.endswith(PART)]
+        if path != root and any(f != MOVE_NOTE for f in filenames):
+            found.append(path)
+            dirnames[:] = []  # moved as a whole, with everything below
+    return found
+
+
+def move_to_annex(folder: Path, log=print, progress: Progress | None = None, dry_run: bool = False) -> Path:
+    """Move the whole folder (inside the home folder) to the annex, leaving a link; returns the annex copy."""
     folder = Path(os.path.abspath(folder))
     annex = require_annex()
     target = annex / relative(folder)
@@ -299,7 +391,8 @@ def from_annex(folder: Path, log=print, progress: Progress | None = None, dry_ru
 
 @dataclass
 class Entry:
-    kind: str  # "ok", "missing link", "broken link", "in both places", "interrupted", "no folder on C:"
+    kind: str  # "ok", "missing link", "broken link", "in both places", "merge pending (to-annex)", "interrupted",
+    #            "no folder on C:"
     home_path: Path  # where it is (or would be) in the home folder
     annex_path: Path | None = None
 
@@ -325,7 +418,11 @@ def status(annex: Path | None = None) -> list[Entry]:
             elif is_link(link):
                 seen_links.add(link)
                 ok = same_path(link_target(link), child)
-                entries.append(Entry("ok" if ok else "broken link", home_child, child))
+                if ok and home_child.is_dir() and not is_link(home_child) and has_files(home_child) \
+                        and not in_rejected_tree(home_child):  # below it, a folder on C: is expected
+                    entries.append(Entry("merge pending (to-annex)", home_child, child))
+                else:
+                    entries.append(Entry("ok" if ok else "broken link", home_child, child))
             elif home_child.is_dir() and not is_link(home_child):
                 if has_files(child):
                     entries.append(Entry("in both places", home_child, child))

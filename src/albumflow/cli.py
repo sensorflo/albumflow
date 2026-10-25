@@ -658,6 +658,15 @@ def move_to_annex(folder: Path, display: ProgressDisplay, dry_run: bool) -> None
 
 def cmd_to_annex(args) -> int:
     display = ProgressDisplay()
+    if args.rejected:
+        if args.target:
+            raise AlbumflowError("Give either a folder or --rejected, not both")
+        folders = annex.rejected_to_drain()
+        if not folders:
+            display.log(f"Nothing to move: no files in {config.REJECTED_TREE} on {annex.home().drive}")
+        for folder in folders:
+            move_to_annex(folder, display, args.dry_run)
+        return 0
     if not args.target:
         return suggest_for_annex(display, args.dry_run)
     move_to_annex(to_annex_folder(args.target), display, args.dry_run)
@@ -1015,9 +1024,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_sync_clocks)
 
     folder_help = "a path ('.', './foo', '~/Music/x', 'C:\\...'), or else a loose album query like 'party/secret'"
-    p = sub.add_parser("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place")
+    p = sub.add_parser("to-annex", help="move a folder to the annex drive, leaving a '(annex)' link in its place",
+                       description="Move a folder to the annex drive, leaving a '(annex)' link in its place. If the "
+                                   "annex has the folder already, its files are merged into it. Below "
+                                   f"{config.REJECTED_TREE}, only the files move: the folder stays, as the drop "
+                                   "target for rejected photos while culling.")
     p.add_argument("target", nargs="?", default="", metavar="folder",
                    help=folder_help + "; none: suggestions (large and long untouched first) to choose from")
+    p.add_argument("--rejected", action="store_true",
+                   help=f"instead of a folder: move the files of every folder below {config.REJECTED_TREE} to the annex")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_to_annex)
 

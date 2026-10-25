@@ -477,6 +477,12 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
   finished albums, but a folder deleted there by hand (or an album copied to
   the secondary by hand, as before albumflow) leaves no trace, and
   `backup-status` then reports its photos as not on the backup drive.
+- Rejected photos (done, 2026-10-25): `Rejected\<topic>\<album>`, mirrored
+  in the annex. While culling they're moved to the C: folder, for speed;
+  `to-annex` on a folder below `Rejected` moves only its files into the
+  annex folder (created with its link the first time) and keeps the folder,
+  the drop target; `to-annex --rejected` does so for all of them. Elsewhere,
+  `to-annex` on a folder whose annex folder exists merges into it.
 - Finishing an album (moving it to `Originals`) should also drain its
   rejected photos on C: (`Rejected\<topic>\<album>`) to the annex, then
   remove the C: folder, leaving only the annex part.

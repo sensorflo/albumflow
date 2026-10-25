@@ -120,6 +120,10 @@ HOME_FOLDER = Path(os.environ.get("ALBUMFLOW_HOME_FOLDER", r"C:\Users\senso"))
 # ".backup-source-sd" is the old name, accepted until the card has been switched.
 ANNEX_MARKERS = [".annex", ".backup-source-sd"]
 ANNEX_SUFFIX = " (annex)"
+# Rejected photos, <REJECTED_TREE>\<topic>\<album> (relative to HOME_FOLDER). While culling they are moved
+# (e.g. by FastRawViewer) to the album's folder on C:, for speed; to-annex moves its files to the annex but
+# keeps the folder, as the drop target, until the album is finished.
+REJECTED_TREE = R"Large\Pictures\Rejected"
 # Where `to-annex` without a folder looks for candidates (relative to HOME_FOLDER). A
 # candidate is a folder that directly contains files, with everything below it.
 ANNEX_SUGGEST_ROOTS = [
