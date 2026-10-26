@@ -501,3 +501,15 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
 - Finishing an album (moving it to `Originals`) should also drain its
   rejected photos on C: (`Rejected\<topic>\<album>`) to the annex, then
   remove the C: folder, leaving only the annex part.
+- In the office (decided 2026-10-26): only the office laptop, with the
+  primary drive (which travels) and the secondary drive (which stays); no
+  private laptop, no cloud. There `python <primary>\Backup\backup.pyz
+  update-secondary` runs `albumflow.pyz` (written by albumflow to both
+  drives, plain Python 3.12+): `update-secondary` copies to the secondary
+  drive and scans it into the primary drive's index; `albumflow.pyz purge`
+  works there too, its knowledge of the laptop (finished albums, pending
+  clock corrections) from the index, recorded at home by every `backup`.
+  Back home, `backup-all` runs `albumflow update-secondary`, which deletes
+  from the cloud what reached the secondary drive. The name stays
+  `update-secondary` (not `update-secondary-drive`): it keeps the secondary
+  backup up to date, drive and cloud.
