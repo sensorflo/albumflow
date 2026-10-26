@@ -1031,15 +1031,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_backup_new)
 
     p = add_command("update-secondary",
-                       help="copy the albums waiting on the primary drive to the secondary drive",
-                       description="Copy the albums waiting on the primary drive (to-secondary) to the secondary "
-                                   "drive, then move them on the primary drive to copied-to-secondary, and delete "
-                                   "from the cloud what is on the secondary drive now. The backup tool runs it as "
-                                   "part of its update-secondary. Whether the backup tool's backup-all also updates "
-                                   "the cloud (update-cloud) is its setting backup_all_includes_update_cloud, "
-                                   "in %APPDATA%\\backup\\config.json: after this, the cloud is no longer needed "
-                                   "as a stand-in for the secondary drive.")
-    p.add_argument("--no-eject", action="store_true", help="don't remove both drives when done")
+                    help="keep the secondary backup up to date: albums to the secondary drive (office), the cloud "
+                         "tidied up (home)",
+                    description="Keep the secondary backup up to date and tidy, with the primary drive and whatever "
+                                "else is here. With the secondary drive (in the office, on the office laptop via "
+                                "albumflow.pyz on the drive): copy the albums waiting on the primary drive "
+                                "(to-secondary) to it, move them on the primary drive to copied-to-secondary, and "
+                                "scan the secondary drive into the primary drive's index. With the cloud (at home): "
+                                "delete from it what is on the secondary drive now, as of that index; the cloud is "
+                                "only a stand-in for the secondary drive. The backup tool runs it in its "
+                                "update-secondary (office) and its backup-all (home). Whether backup-all also "
+                                "updates the cloud (update-cloud) is the backup tool's setting "
+                                "backup_all_includes_update_cloud, in %APPDATA%\\backup\\config.json.")
+    p.add_argument("--no-eject", action="store_true", help="don't remove the drives when done")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
 

@@ -104,10 +104,10 @@ def test_dry_run_changes_nothing(drives):
     assert any("party\\fest: 1 files" in line for line in lines)
 
 
-def test_needs_both_drives(drives, monkeypatch):
-    primary, _ = drives
-    monkeypatch.setattr(backup, "drives", lambda: [primary])
-    with pytest.raises(AlbumflowError, match="secondary drive"):
+def test_needs_the_primary_drive(drives, monkeypatch):
+    _, secondary = drives
+    monkeypatch.setattr(backup, "drives", lambda: [secondary])
+    with pytest.raises(AlbumflowError, match="primary drive"):
         backup.update_secondary(log=lambda *_: None)
 
 
@@ -342,3 +342,31 @@ def test_kept_names_also_in_new_old_and_the_annex(new, tmp_path):
     assert backup.kept_names(Path(r"trip\old")) == {"1.ARW"}
     assert backup.kept_names(Path(r"trip\day1")) == {"2.ARW"}
     assert backup.kept_names(Path(r"trip\renamed")) is None
+
+
+def test_update_secondary_at_home_tidies_the_cloud_as_of_the_index(drives, cloud, monkeypatch):
+    primary, secondary = drives
+    waiting(primary, r"party\fest", {"1.ARW": b"one", "2.ARW": b"two"})
+    backup.update_cloud(log=lambda *_: None)  # on holiday: both photos to the cloud
+    waiting(primary, r"party\later", {"3.ARW": b"three"})
+    backup.update_cloud(log=lambda *_: None)
+    monkeypatch.setattr(config, "CLOUD_PICTURES", cloud.parent / "not here")  # in the office: no cloud
+    lines = []
+    backup.update_secondary(log=lines.append)  # copies party\fest and party\later, scans into the index
+    assert any("The cloud isn't here" in line for line in lines)
+    monkeypatch.setattr(config, "CLOUD_PICTURES", cloud)  # back home, without the secondary drive
+    monkeypatch.setattr(backup, "drives", lambda: [primary])
+    (cloud / "trip" / "open").mkdir(parents=True)
+    (cloud / "trip" / "open" / "9.ARW").write_bytes(b"nine")  # not on the secondary drive
+    lines = []
+    backup.update_secondary(log=lines.append)
+    assert "The secondary drive is not connected: only the cloud is tidied up." in lines
+    assert tree(cloud) == {r"trip\open\9.ARW": b"nine"}
+
+
+def test_update_secondary_without_the_secondary_drive_nor_the_cloud(drives, monkeypatch):
+    primary, _ = drives
+    monkeypatch.setattr(backup, "drives", lambda: [primary])
+    lines = []
+    backup.update_secondary(log=lines.append)
+    assert lines[0].startswith("Nothing to update: neither is the secondary drive")

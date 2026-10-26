@@ -369,43 +369,60 @@ def move_to_copied(album: WaitingAlbum) -> None:
 
 def update_secondary(dry_run: bool = False, log=print, progress: Progress | None = None,
                      remove_drives: bool = False) -> None:
-    """Copy the albums waiting on the primary drive to the secondary drive, then move them on the
-    primary drive from BACKUP_DIR to COPIED_DIR. With remove_drives, remove both drives at the end."""
+    """Keep the secondary backup up to date and tidy, with the primary drive and whatever else is connected:
+    with the secondary drive (in the office), copy the albums waiting on the primary drive there, move them
+    on the primary drive from BACKUP_DIR to COPIED_DIR, and scan the secondary drive into the primary drive's
+    index; with the cloud (at home), delete from it what is on the secondary drive, as there or as of the
+    index. With remove_drives, remove the drives at the end."""
     drive, secondary = find_backup_drive(), find_secondary_drive()
+    cloud = config.CLOUD_PICTURES.is_dir()
     if drive is None:
         raise AlbumflowError(f"The primary drive (with a {config.BACKUP_MARKER} file) is not connected")
-    if secondary is None:
-        raise AlbumflowError(f"The secondary drive (with a {config.SECONDARY_BACKUP_MARKER} file) "
-                             "is not connected")
+    if secondary is None and not cloud:  # e.g. at home, the cloud never used: nothing to do (backup-all runs this)
+        log(f"Nothing to update: neither is the secondary drive (with a {config.SECONDARY_BACKUP_MARKER} file) "
+            f"connected, nor is the cloud ({config.CLOUD_PICTURES}) here.")
+        return
     if drive == secondary:
         raise AlbumflowError(f"{drive} has the markers of both the primary and the secondary drive")
-    dest_root = secondary / config.SECONDARY_DIR
-    albums = waiting_albums(drive, dest_root)
-    if _check_space(albums, dest_root, free_space(secondary), log) and not dry_run:
-        for album in _copy(albums, progress):
-            move_to_copied(album)
-            log(f"  {album.name}: on the secondary drive, moved to {config.COPIED_DIR}")
-    # The cloud only stands in for the secondary drive: what is on it now goes from the cloud
-    delete_from_cloud(cloud_files_on(dest_root), "on the secondary drive now", dry_run, log)
-    if not dry_run:
-        index.record_secondary(drive, secondary)
+    if secondary:
+        dest_root = secondary / config.SECONDARY_DIR
+        albums = waiting_albums(drive, dest_root)
+        if _check_space(albums, dest_root, free_space(secondary), log) and not dry_run:
+            for album in _copy(albums, progress):
+                move_to_copied(album)
+                log(f"  {album.name}: on the secondary drive, moved to {config.COPIED_DIR}")
+        if not dry_run:
+            index.record_secondary(drive, secondary)
+    else:
+        log("The secondary drive is not connected: only the cloud is tidied up.")
+    if cloud:
+        # The cloud only stands in for the secondary drive: what is on it now goes from the cloud
+        delete_from_cloud(cloud_files_on_secondary(drive), "on the secondary drive now", dry_run, log)
+    else:
+        log("The cloud isn't here: what is on the secondary drive now goes from it at the next "
+            "update-secondary at home (the backup tool's backup-all runs it).")
     if remove_drives and not dry_run:
-        remove_backup_drive(drive, log)
-        remove_backup_drive(secondary, log)
+        for connected in (drive, secondary):
+            if connected:
+                remove_backup_drive(connected, log)
 
 
-def cloud_files_on(root: Path) -> list[Path]:
-    """The files in the cloud whose photo is also below root (<topic>\\<album>\\<name>): with the same name
-    and size, or, for a clock-corrected copy (<master time>-<import name>), its original by import name."""
+def cloud_files_on_secondary(drive: Path) -> list[Path]:
+    """The files in the cloud whose photo is also on the secondary drive (there, or as of the primary drive's
+    index): with the same name and size, or, for a clock-corrected copy (<master time>-<import name>), its
+    original by import name."""
     cloud = config.CLOUD_PICTURES
     found = []
-    for path in sorted(cloud.rglob("*")) if cloud.is_dir() else []:
-        if not path.is_file() or path.suffix == ".part":
+    for folder in sorted(cloud.glob("*/*")) if cloud.is_dir() else []:
+        if not folder.is_dir():
             continue
-        corrected, import_name = split_name(path.name)
-        other = root / path.parent.relative_to(cloud) / import_name
-        if other.is_file() and (corrected or other.stat().st_size == path.stat().st_size):
-            found.append(path)
+        known = on_secondary_drive(drive, folder.parent.name, folder.name)
+        for path in sorted(folder.rglob("*")):
+            if not path.is_file() or path.suffix == ".part":
+                continue
+            corrected, import_name = split_name(path.name)
+            if import_name in known and (corrected or known[import_name] == path.stat().st_size):
+                found.append(path)
     return found
 
 
