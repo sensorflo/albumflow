@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, lightroom, purge,
-                       selfcopy)
+                       index, selfcopy)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -819,6 +819,8 @@ def cmd_backup_new(args) -> int:
         drive = backup.wait_for_backup_drive(drive, display.log)
     progress = _BackupBar(display, drive).progress
     if not args.all:
+        if drive and not args.dry_run:
+            index.record_laptop(drive)  # before the drive may be removed
         backup.backup_new(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
                           progress=progress, remove_drive=not args.no_eject)
         remind_pending(display.log)
@@ -840,6 +842,8 @@ def cmd_backup_new(args) -> int:
         display.log(f"{album}:")
         backup.backup_new(album.topic, album.name, drive=drive, dry_run=args.dry_run, log=display.log,
                           progress=progress)
+    if not args.dry_run:
+        index.record_laptop(drive)  # for purging on another computer: finished albums, pending corrections
     if not args.no_eject and not args.dry_run:
         backup.remove_backup_drive(drive, display.log)
     remind_pending(display.log)
@@ -920,6 +924,10 @@ def cmd_purge(args, ask=input) -> int:
         anchor = annex.home().anchor if place == "rejected" else candidates[0].root.anchor if candidates else None
         free = f" ({shutil.disk_usage(anchor).free / 1e9:.0f} GB free)" if anchor else ""
         print(f"\n{place}: {description}{free}")
+        if place in ("card", "secondary") and not config.ORIGINALS.is_dir():
+            known = index.laptop_part(backup.find_backup_drive(), "originals")
+            print(f"  finished albums: as of {known[1]} (the primary drive's index)" if known
+                  else "  finished albums: unknown (neither Originals here nor recorded in the primary drive's index)")
         if not candidates:
             print("  nothing to purge")
             continue

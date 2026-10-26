@@ -70,3 +70,24 @@ def on_secondary(drive: Path, topic: str | None, album: str) -> dict[str, int]:
         if a == album and (topic is None or t == topic):
             found.update(files)
     return found
+
+
+def record_laptop(drive: Path) -> None:
+    """Record what only the laptop knows, for purging on another computer: the albums in ORIGINALS (finished),
+    and those in the new tree with clock corrections pending (which need their originals on the primary drive)."""
+    from albumflow import annex, clock, purge  # not at the top: they import this module's users
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    finished = sorted({f"{p.parent.name}\\{p.name.removesuffix(config.ANNEX_SUFFIX)}"
+                       for p in config.ORIGINALS.glob("*/*") if p.is_dir() or annex.is_link(p)})
+    pending = sorted(f"{p.parent.name}\\{p.name}" for p in config.PICTURES_NEW.glob("*/*")
+                     if p.is_dir() and not annex.is_link(p) and purge.corrections_pending(p.parent.name, p.name))
+    data = dict(load(drive))
+    data["originals"] = {"scanned": now, "albums": finished}
+    data["corrections_pending"] = {"scanned": now, "albums": pending}
+    save(drive, data)
+
+
+def laptop_part(drive: Path | None, part: str) -> tuple[set[str], str] | None:
+    """(albums, when scanned) of the "originals" or "corrections_pending" part; None if never recorded."""
+    entry = load(drive).get(part) if drive else None
+    return (set(entry["albums"]), entry["scanned"]) if entry else None

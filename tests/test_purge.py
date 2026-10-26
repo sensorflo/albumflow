@@ -180,3 +180,15 @@ def test_primary_needs_the_index_for_an_unfinished_album(world, monkeypatch):
         r"party\fest": "2 of 2 photos not in the index of the secondary drive yet (update-secondary scans it)"}
     finish(r"party\fest")
     assert candidates("primary") == {r"party\fest": None}  # finished: Originals answers instead
+
+
+def test_backup_new_records_the_laptop_side_in_the_index(world, monkeypatch):
+    from albumflow import index
+    new = world["home"] / "new"
+    monkeypatch.setattr(config, "PICTURES_NEW", new)
+    album(new, r"party\open")
+    finish(r"party\done")
+    monkeypatch.setattr(purge, "corrections_pending", lambda topic, album: album == "open")
+    assert cli.main(["backup-new", "--all", "--no-eject"]) == 0
+    assert index.laptop_part(world["primary"], "originals")[0] == {r"party\done"}
+    assert index.laptop_part(world["primary"], "corrections_pending")[0] == {r"party\open"}

@@ -50,7 +50,12 @@ class Candidate:
 
 
 def is_finished(topic: str | None, album: str) -> bool:
-    """Whether the album is in ORIGINALS, also if moved to the annex; topic None: in any topic."""
+    """Whether the album is in ORIGINALS, also if moved to the annex; topic None: in any topic. On another
+    computer (no ORIGINALS), as recorded in the primary drive's index; unknown counts as not finished."""
+    if not config.ORIGINALS.is_dir():
+        known = index.laptop_part(backup.find_backup_drive(), "originals")
+        return bool(known) and any(a.partition("\\")[2] == album and (topic is None or a.partition("\\")[0] == topic)
+                                   for a in known[0])
     folders = [config.ORIGINALS / topic / album] if topic else list(config.ORIGINALS.glob(f"*/{album}"))
     folders += [annex.link_of(f) for f in folders] + list(config.ORIGINALS.glob(f"*/{album}{config.ANNEX_SUFFIX}"))
     return any(f.is_dir() or os.path.lexists(f) for f in folders)
@@ -118,6 +123,9 @@ def rejected_candidates() -> list[Candidate]:
 def corrections_pending(topic: str, album: str) -> bool:
     """Whether photos of the album (in the new tree) still wait for a clock correction."""
     album_dir = config.album_dir(topic, album)
+    if not config.PICTURES_NEW.is_dir():  # on another computer: as recorded; unknown counts as pending
+        known = index.laptop_part(backup.find_backup_drive(), "corrections_pending")
+        return known is None or f"{topic}\\{album}" in known[0]
     if not (album_dir.is_dir() and clock.has_measurements(album_dir)):
         return False
     state = clock.AlbumState(album_dir)

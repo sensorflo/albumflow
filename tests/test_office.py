@@ -37,3 +37,20 @@ def test_purge_in_the_office(office, capsys):
     assert cli.cmd_purge(args, ask=lambda prompt: "") == 0  # lists, chooses none
     out = capsys.readouterr().out
     assert "primary:" in out and "secondary:" in out
+
+
+def test_purge_in_the_office_knows_from_the_index_what_is_finished(office, capsys):
+    primary, secondary = office
+    for name in (r"party\done", r"party\open"):
+        (secondary / config.SECONDARY_DIR / name).mkdir(parents=True)
+    from albumflow import purge
+    assert {c.name: c.blocked for c in purge.drive_candidates(secondary / config.SECONDARY_DIR, True)} == {
+        r"party\done": "not finished yet (not in Originals)", r"party\open": "not finished yet (not in Originals)"}
+    data = index.load(primary) | {"originals": {"scanned": "2026-10-24T20:00:00", "albums": [r"party\done"]},
+                                  "corrections_pending": {"scanned": "2026-10-24T20:00:00", "albums": []}}
+    index.save(primary, data)
+    assert {c.name: c.blocked for c in purge.drive_candidates(secondary / config.SECONDARY_DIR, True)} == {
+        r"party\done": None, r"party\open": "not finished yet (not in Originals)"}
+    args = cli.build_parser().parse_args(["purge", "secondary"])
+    cli.cmd_purge(args, ask=lambda prompt: "")
+    assert "finished albums: as of 2026-10-24T20:00:00 (the primary drive's index)" in capsys.readouterr().out
