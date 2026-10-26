@@ -14,6 +14,7 @@ from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
+from albumflow.files import AlbumflowError
 from albumflow.paths import config_dir
 
 SCOPES = [
@@ -28,7 +29,7 @@ BASE = "https://photoslibrary.googleapis.com/v1"
 BATCH = 50  # API limit for batchCreate / batchAdd / batchRemove
 
 
-class ApiError(RuntimeError):
+class ApiError(AlbumflowError):
     pass
 
 

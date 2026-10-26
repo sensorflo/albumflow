@@ -9,9 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from google.auth.transport.requests import AuthorizedSession
-
-from albumflow import gphotos_api
 
 BASE = "https://www.googleapis.com/drive/v3"
 FOLDER = "application/vnd.google-apps.folder"
@@ -23,11 +20,13 @@ def _quote(name: str) -> str:
 
 class Drive:
     def __init__(self, creds):
+        from google.auth.transport.requests import AuthorizedSession  # only here: albumflow.pyz runs without it
         self.s = AuthorizedSession(creds)
 
     def _call(self, method: str, path: str, params: dict | None = None) -> dict:
         r = self.s.request(method, f"{BASE}/{path}", params=params, timeout=120)
         if r.status_code >= 400:
+            from albumflow import gphotos_api
             raise gphotos_api.ApiError(f"Google Drive {method} {path}: {r.status_code} {r.text[:300]}")
         return r.json() if r.content else {}
 
@@ -66,6 +65,10 @@ class Drive:
 
 def drive() -> Drive | None:
     """A Drive client, or None if not logged in with the Drive permission (see google-login)."""
+    try:
+        from albumflow import gphotos_api
+    except ImportError:  # e.g. albumflow.pyz on another computer
+        return None
     try:
         return Drive(gphotos_api.credentials(interactive=False))
     except gphotos_api.ApiError:

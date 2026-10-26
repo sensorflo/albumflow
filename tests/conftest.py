@@ -15,3 +15,10 @@ def no_google_drive(tmp_path, monkeypatch):
     from albumflow import gdrive
     monkeypatch.setattr(config, "CLOUD_MY_DRIVE", tmp_path / "no-cloud")
     monkeypatch.setattr(gdrive, "drive", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def no_self_copy(monkeypatch):
+    """No test writes albumflow.pyz to a drive (test_selfcopy calls selfcopy.write directly)."""
+    from albumflow import selfcopy
+    monkeypatch.setattr(selfcopy, "write_to_connected", lambda: None)

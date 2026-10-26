@@ -37,6 +37,8 @@ SECONDARY_DIR = r"Backup\pictures-new"
 # On the primary drive: albumflow's index of what it can't see while the secondary drive isn't connected
 # (see index.py)
 INDEX_FILE = r"Backup\pictures-new\index.json"
+# On the primary and secondary drive: a copy of albumflow for another computer (see selfcopy.py)
+SELF_COPY = r"Backup\albumflow.pyz"
 # While the secondary drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))

@@ -15,13 +15,14 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, gphotos_api,
-                       gphotos_sync, lightroom, purge)
+from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, lightroom, purge,
+                       selfcopy)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
 
-def _api(interactive: bool = False) -> gphotos_api.GPhotos:
+def _api(interactive: bool = False):
+    from albumflow import gphotos_api  # the Google libraries only where needed: albumflow.pyz runs without them
     return gphotos_api.GPhotos(gphotos_api.credentials(interactive=interactive))
 
 
@@ -40,6 +41,7 @@ def cmd_gphotos_albums(args) -> int:
 def cmd_gphotos_sync(args) -> int:
     folder = Path(args.folder)
     title = args.title or folder.name
+    from albumflow import gphotos_sync
     return gphotos_sync.sync(_api(), folder, title, dry_run=args.dry_run)
 
 
@@ -810,6 +812,7 @@ def cmd_annex_status(args) -> int:
 
 
 def cmd_backup_new(args) -> int:
+    selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
     drive = _path(args.drive)
     if not args.dry_run:
@@ -844,6 +847,7 @@ def cmd_backup_new(args) -> int:
 
 
 def cmd_update_secondary(args) -> int:
+    selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
     backup.update_secondary(dry_run=args.dry_run, log=display.log, progress=display.bar("to the secondary", last=True),
                             remove_drives=not args.no_eject)
@@ -852,6 +856,7 @@ def cmd_update_secondary(args) -> int:
 
 
 def cmd_update_cloud(args) -> int:
+    selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
     backup.update_cloud(dry_run=args.dry_run, log=display.log, progress=display.bar("to the cloud", last=True))
     remind_pending(display.log)
@@ -903,6 +908,7 @@ PURGE_PLACES = purge.PLACES
 
 
 def cmd_purge(args, ask=input) -> int:
+    selfcopy.write_to_connected()  # albumflow for the office laptop
     available = purge.places()
     wanted = args.place or [place for place, _, _ in available]
     for place in wanted:
@@ -1137,7 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
             args.topic, args.album = choose_album(args.album_query, getattr(args, "create_album", False),
                                                   candidates=album_candidates(args.album_query))
         return args.func(args)
-    except (gphotos_api.ApiError, AlbumflowError) as e:
+    except AlbumflowError as e:  # also the Google APIs' ApiError
         print(f"Error: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:  # Ctrl+C: no traceback; moves and imports can simply be run again
