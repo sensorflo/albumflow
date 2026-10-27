@@ -256,6 +256,21 @@ def test_emdb_round_trip_and_location_change(tmp_path):
     assert [m.location for m in emdb.movies(emdb.read_lines(path))] == [R"C:\x\1917 [BluRay].mkv", ""]
 
 
+def test_emdb_escapes(tmp_path):
+    """As EMDB itself wrote it, e.g. for a Location typed into EMDB; a raw { broke EMDB's reading of the movie."""
+    written = R'C:\x\Eraserhead (1977) <CB>Remastered<CCB> <SC>1080p<SCB> <DQ>a<DQ>.mkv'
+    assert emdb.decode(written) == R'C:\x\Eraserhead (1977) {Remastered} [1080p] "a".mkv'
+    assert emdb.encode(emdb.decode(written)) == written
+    with pytest.raises(AlbumflowError, match="contains"):
+        emdb.encode("C:\\x\\a\nb.mkv")
+    path = tmp_path / "emdb.dat"
+    write_db(path, [("Eraserhead", "")])
+    lines = emdb.read_lines(path)
+    emdb.write_lines(path, emdb.with_locations(lines, {emdb.movies(lines)[0].line: R"C:\x\E {Remastered}\e.mkv"}))
+    raw = path.read_bytes().decode("utf-16")
+    assert "<CB>Remastered<CCB>" in raw and "{Remastered}" not in raw
+
+
 def test_emdb_unknown_format(tmp_path):
     path = tmp_path / "emdb.dat"
     path.write_bytes(emdb.BOM + f'{emdb.TITLE_PREFIX}x",\r\n{emdb.YEAR_PREFIX}2019{SEP}0",'.encode("utf-16-le"))

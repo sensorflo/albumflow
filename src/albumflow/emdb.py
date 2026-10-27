@@ -2,8 +2,9 @@
 
 The file is UTF-16 with a BOM and CRLF lines, JSON-like but not JSON. Each movie has one line starting with
 YEAR_PREFIX whose value is FIELDS fields separated by "\\x1e"; field LOCATION_FIELD is the Location, e.g. a movie
-file's path. In it EMDB writes "[" as "<SC>" and "]" as "<SCB>"; a leading "[label]" is a volume label. Anything
-unexpected stops reading, and a written file differs from the read one only in the changed Locations.
+file's path. In its values EMDB writes some characters as tokens (ESCAPES), and never leaves them as they are; a
+leading "[label]" is a volume label. Anything unexpected stops reading, and a written file differs from the read one
+only in the changed Locations.
 """
 
 from __future__ import annotations
@@ -33,12 +34,23 @@ class Movie:
     line: int  # index of its YEAR_PREFIX line
 
 
+# How EMDB writes these characters in its values, as seen in emdb.dat (a raw one breaks EMDB's reading of the movie)
+ESCAPES = {"[": "<SC>", "]": "<SCB>", "{": "<CB>", "}": "<CCB>", '"': "<DQ>"}
+
+
 def decode(field: str) -> str:
-    return field.replace("<SCB>", "]").replace("<SC>", "[")
+    for char, token in sorted(ESCAPES.items(), key=lambda e: -len(e[1])):  # <SCB> before <SC>
+        field = field.replace(token, char)
+    return field
 
 
 def encode(location: str) -> str:
-    return location.replace("[", "<SC>").replace("]", "<SCB>")
+    # Characters a path can't hold, and so EMDB's escaping wasn't seen for
+    if bad := re.findall(r"[\x00-\x1f<>|]", location):
+        raise AlbumflowError(f"Can't write the Location {location!r} into EMDB's database: it contains {bad[0]!r}")
+    for char, token in ESCAPES.items():
+        location = location.replace(char, token)
+    return location
 
 
 def without_label(location: str) -> str:
