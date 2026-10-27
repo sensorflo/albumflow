@@ -15,8 +15,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, lightroom, purge,
-                       index, selfcopy)
+from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, emdb, lightroom, movies,
+                       purge, index, selfcopy)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -811,6 +811,108 @@ def cmd_annex_status(args) -> int:
     return 1
 
 
+def choose_movie(target: str, names: list[str], ask=input) -> str:
+    """A movie by its path or name, or by words in its name; a choice if several match."""
+    if looks_like_path(target):
+        path = as_path(target)
+        if not annex.same_path(path.parent, movies.movies_dir()):
+            raise AlbumflowError(f"{path} is not a movie in {movies.movies_dir()}")
+        target = path.name
+    exact = [n for n in names if n.lower() == target.lower()]
+    words = target.lower().split()
+    matches = exact or [n for n in names if all(w in n.lower() for w in words)]
+    if not matches:
+        raise AlbumflowError(f"No movie matches '{target}'")
+    if len(matches) == 1:
+        return matches[0]
+    for i, name in enumerate(matches, 1):
+        print(f"{i:>2} {name}")
+    selection = parse_selection(ask("Which one? (number; Enter: none): "), len(matches))
+    if not selection or len(selection) != 1:
+        raise AlbumflowError("No movie chosen")
+    return matches[selection[0] - 1]
+
+
+def cmd_movie_to_annex(args) -> int:
+    folder = movies.movies_dir()
+    names = [n for n in movies.movie_names() if not annex.is_link(folder / n)]
+    name = choose_movie(args.movie, names)
+    display = ProgressDisplay()
+    movies.to_hdd(name, log=display.log, progress=display.bar("to movie annex"), dry_run=args.dry_run)
+    return 0
+
+
+def cmd_movie_from_annex(args) -> int:
+    folder = movies.movies_dir()
+    names = [n for n in movies.movie_names() if annex.is_link(folder / n)]
+    name = choose_movie(args.movie, names)
+    display = ProgressDisplay()
+    movies.from_hdd(name, log=display.log, progress=display.bar("from movie annex"), dry_run=args.dry_run)
+    return 0
+
+
+def movie_problems(hdd: Path | None) -> tuple[list[movies.Entry], dict[int, str], list[str] | None]:
+    """All entries (movies and problems), EMDB's new Locations by line, and EMDB's lines (None without EMDB)."""
+    entries = movies.status(hdd)
+    if any(e.kind == "old layout" for e in entries) or not config.EMDB_DATABASE.is_file():
+        return entries, {}, None  # EMDB's Locations only once the movie annex mirrors the home folder
+    lines = emdb.read_lines(config.EMDB_DATABASE)
+    changes, found = movies.location_fixes(emdb.movies(lines, config.EMDB_DATABASE), hdd)
+    return entries + found, changes, lines
+
+
+def cmd_movie_status(args, ask=input) -> int:
+    hdd = movies.find_hdd()
+    entries, changes, lines = movie_problems(hdd)
+    problems = [e for e in entries if e.problem]
+    for kind in dict.fromkeys(e.kind for e in (entries if args.verbose else problems)):
+        these = [e for e in entries if e.kind == kind]
+        hint = movies.KINDS.get(kind)
+        print(f"{kind} ({len(these)})" + (f": {hint}" if hint else ""))
+        for e in these if args.verbose else these[:10]:
+            print(f"  {e.name}" + (f"\n    {e.detail}" if args.verbose and e.detail else ""))
+        if len(these) > 10 and not args.verbose:
+            print(f"  ... and {len(these) - 10} more (-v lists all)")
+    counts = {kind: sum(1 for e in entries if e.kind == kind) for kind in
+              ("on C:", "on the movie annex", "on the movie annex (not connected)")}
+    summary = (f"Movies: {counts['on C:']} on C:, "
+               f"{counts['on the movie annex'] + counts['on the movie annex (not connected)']} on the movie annex"
+               + ("" if hdd else " (not connected: not checked)"))
+    if lines is None and config.EMDB_DATABASE.is_file():
+        summary += "; EMDB not checked yet"
+    print(f"{summary}; " + (f"{len(problems)} problem(s)." if problems else "no problems."))
+    if not (args.fix and problems):
+        return 1 if problems else 0
+
+    def agree(question: str) -> bool:
+        return ask(f"{question} [y/N] ").strip().lower() == "y"
+
+    print()
+    old = [e for e in problems if e.kind == "old layout"]
+    if old and agree(f"Move the movie annex's {config.MOVIE_ANNEX_OLD_ROOT} to {config.MOVIES}?"):
+        movies.fix_layout(hdd)
+        entries, changes, lines = movie_problems(hdd)
+    loose = [Path(e.detail) for e in entries if e.kind == "loose file"]
+    if loose and agree(f"Put {len(loose)} loose movie file(s) into a folder of their own each?"):
+        for file in loose:
+            print(f"  {movies.wrap(file)}")
+        entries, changes, lines = movie_problems(hdd)
+    missing = [e for e in entries if e.kind == "missing link"]
+    if missing and agree(f"Create {len(missing)} missing link(s) on C:?"):
+        for e in missing:
+            target = movies.on_hdd(hdd) / e.name
+            movies.create_link(movies.movies_dir() / e.name, movies.volume_path(target))
+        entries, changes, lines = movie_problems(hdd)
+    if changes:
+        emdb.check_safe_to_write(config.EMDB_DATABASE, annex.running_editors())
+        if agree(f"Change {len(changes)} Location(s) in EMDB's database?"):
+            emdb.write_lines(config.EMDB_DATABASE, emdb.with_locations(lines, changes))
+            print(f"  changed; EMDB's backup of before: {emdb.newest_backup().parent}")
+    left = [e for e in movie_problems(hdd)[0] if e.problem]
+    print(f"{len(left)} problem(s) left." if left else "No problems left.")
+    return 1 if left else 0
+
+
 def cmd_backup_new(args) -> int:
     selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
@@ -1116,6 +1218,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fix", action="store_true", help="create missing links (asks first)")
     p.add_argument("-v", "--verbose", action="store_true", help="also list the folders that are fine")
     p.set_defaults(func=cmd_annex_status)
+
+    movie_help = "its name, or words in it (a choice if several match), or its path"
+    p = add_command("movie-to-annex", help="move a movie to the movie annex (the HDD), leaving a link with its name",
+                    description="Move a movie (a folder in Large\\Videos) to the movie annex, the HDD with a "
+                                f"{config.MOVIE_ANNEX_MARKER} file, leaving a link with the movie's name, pointing "
+                                "to the HDD's volume. So its path, and EMDB's Location, stay the same.")
+    p.add_argument("movie", help=movie_help)
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_movie_to_annex)
+
+    p = add_command("movie-from-annex", help="move a movie back from the movie annex, replacing its link")
+    p.add_argument("movie", help=movie_help)
+    p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    p.set_defaults(func=cmd_movie_from_annex)
+
+    p = add_command("movie-status", help="list where the movies are, and problems: missing links, and EMDB "
+                                         "Locations not pointing to Large\\Videos",
+                    description="List where the movies are (C: or the movie annex), and problems: the movie "
+                                "annex's old layout, loose movie files, missing or broken links, EMDB Locations "
+                                "that don't point to the movie in Large\\Videos, and movies not in EMDB. Without "
+                                "the movie annex, only what's on C: is checked. --fix asks before each kind of "
+                                "fix; it changes EMDB's database only while EMDB is closed and its newest backup "
+                                "(made in EMDB) is the current database.")
+    p.add_argument("--fix", action="store_true", help="fix what can be fixed (asks first)")
+    p.add_argument("-v", "--verbose", action="store_true", help="also list the movies that are fine, and details")
+    p.set_defaults(func=cmd_movie_status)
 
     p = add_command("google-login", help="log in to Google, for Google Photos (gphotos-*) and Google Drive "
                                             "(deleting cloud copies permanently); opens the browser")

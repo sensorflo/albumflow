@@ -145,6 +145,23 @@ ANNEX_AGE_DAYS = 180
 # digikam.exe, which may run during moves).
 APPS_MODIFYING_FILES = {"darktable.exe", "ansel.exe", "Lightroom.exe", "emdb.exe"}
 
+# Movies: <MOVIES>\<movie> (relative to HOME_FOLDER), each a folder. Most are on the movie annex, an external HDD
+# that is often disconnected, mirroring the home folder like the annex: <movie annex>\<MOVIES>\<movie>. At the
+# movie's place on C: there is a junction with the movie's own name (a movie always moves as a whole), pointing to
+# the HDD's volume rather than its drive letter. So a movie's path, and EMDB's Location, never change.
+MOVIES = R"Large\Videos"
+MOVIE_ANNEX_MARKER = ".movie-annex"
+# Folders in MOVIES that aren't movies (Windows' and NVIDIA's screen recordings)
+NOT_MOVIES = ["Captures", "NVIDIA"]
+MOVIE_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts", ".webm"}
+# EMDB (Eric's Movie Database): its database, and the folder its backups (File > Backup) go to
+EMDB_DATABASE = Path(os.environ.get("ALBUMFLOW_EMDB", R"C:\Users\senso\AppData\Roaming\EMDB\emdb.dat"))
+EMDB_BACKUPS = Path(R"C:\Users\senso\Documents\EMDB\Backups")
+# Where the movie annex had the movies before it mirrored the home folder (as EMDB's Locations still say); movie-status
+# --fix moves them to <movie annex>\<MOVIES> and points the Locations there
+MOVIE_ANNEX_OLD_ROOT = "Videos"
+EMDB_OLD_MOVIE_ROOTS = [R"D:\Videos", R"S:\media\sensorflo\7e0fb0f5-7af1-4290-8fe5-e6a35b6c12b8\Videos"]
+
 # Lightroom catalogs, read (never written) before folders are moved to or from the annex.
 LIGHTROOM_CATALOGS = [Path(r"C:\Users\senso\Large\Pictures\Lightroom\Lightroom Catalog.lrcat")]
 

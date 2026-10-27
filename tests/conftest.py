@@ -22,3 +22,10 @@ def no_self_copy(monkeypatch):
     """No test writes albumflow.pyz to a drive (test_selfcopy calls selfcopy.write directly)."""
     from albumflow import selfcopy
     monkeypatch.setattr(selfcopy, "write_to_connected", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_emdb(tmp_path, monkeypatch):
+    """No test reads or writes the real EMDB database or its backups."""
+    monkeypatch.setattr(config, "EMDB_DATABASE", tmp_path / "no-emdb" / "emdb.dat")
+    monkeypatch.setattr(config, "EMDB_BACKUPS", tmp_path / "no-emdb" / "Backups")

@@ -334,6 +334,48 @@ To do:
 - The annex treats every folder alike, `new\OnlyForOthers` included: it only
   exists because C: is too small; semantically there is one home folder tree.
 
+## Movies and the movie annex
+
+Movies are in `Large\Videos\<movie>`, each a folder. Most are on the **movie
+annex**, an external HDD that is often disconnected (marker `.movie-annex`),
+mirroring the home folder like the annex: `<HDD>\Large\Videos\<movie>`.
+
+- `albumflow movie-to-annex <movie>` / `movie-from-annex <movie>`: the movie by
+  name, words in it (a choice if several match), or path. Same crash-safe move
+  as the annex (`.part`, move note, checks, re-run continues).
+- The link has the **movie's own name**, without " (annex)": a movie always
+  moves as a whole, so folder and link never coexist. It points to the HDD's
+  **volume** (`\\?\Volume{...}\Large\Videos\<movie>`), not its drive letter. So
+  a movie's path never changes, wherever it is.
+- **EMDB's Location** always points to the movie on C:
+  (`C:\Users\senso\Large\Videos\<movie>\<file>`), so moves never touch EMDB.
+  Without the HDD, a movie on it is missing for EMDB, as before.
+- `albumflow movie-status [--fix] [-v]`: where the movies are, and problems:
+  the HDD's old layout, loose movie files (a link can only stand for a folder),
+  missing or broken links, in both places, interrupted moves, EMDB Locations
+  that are outdated or not found, movies no Location points into. Without the
+  HDD only what's on C: is checked. `--fix` asks per kind: move `<HDD>\Videos`
+  to `<HDD>\Large\Videos`; put each loose movie file (with files named like it,
+  e.g. subtitles) into a folder named like it; create the missing links;
+  rewrite outdated Locations (from `EMDB_OLD_MOVIE_ROOTS`, also with a
+  `[label]`, and for wrapped files) to their movie on C:, only where the file is
+  found there.
+- emdb.dat (`%APPDATA%\EMDB`): UTF-16, JSON-like; each movie's `"year"` line
+  holds 17 fields separated by `\x1e`, field 7 the Location (`[`/`]` written
+  as `<SC>`/`<SCB>`). Only that field is changed, everything else stays byte
+  for byte; an unexpected format stops it. Written only while EMDB is closed
+  and the newest backup made in EMDB (`Documents\EMDB\Backups\EMDB_BACKUP_*`)
+  is byte for byte the current database; atomically.
+
+To do (once the HDD is connected):
+
+1. Put a `.movie-annex` file into the HDD's root.
+2. Make a backup in EMDB, close EMDB.
+3. `albumflow movie-status --fix`, answering y to each: the layout, loose
+   files, about 350 links, the Locations.
+4. `albumflow movie-status`: what's left (e.g. Locations not found, like
+   The Fifth Element and Enter the Void, assumed on the HDD).
+
 ## Terms: backups and drives
 
 Decided 2026-10-25. Roles are backups, devices are drives (and the cloud); each device is named after the
