@@ -851,19 +851,38 @@ def cmd_movie_from_annex(args) -> int:
     return 0
 
 
-def movie_problems(hdd: Path | None) -> tuple[list[movies.Entry], dict[int, str], list[str] | None]:
-    """All entries (movies and problems), EMDB's new Locations by line, and EMDB's lines (None without EMDB)."""
+def movie_problems(hdd: Path | None) -> tuple[list[movies.Entry], movies.Sync | None, list[str] | None]:
+    """All entries (movies and problems), what makes EMDB match them, and EMDB's lines (both None without EMDB)."""
     entries = movies.status(hdd)
     if any(e.kind == "old layout" for e in entries) or not config.EMDB_DATABASE.is_file():
-        return entries, {}, None  # EMDB's Locations only once the movie annex mirrors the home folder
+        return entries, None, None  # EMDB only once the movie annex mirrors the home folder
     lines = emdb.read_lines(config.EMDB_DATABASE)
-    changes, found = movies.location_fixes(emdb.movies(lines, config.EMDB_DATABASE), hdd)
-    return entries + found, changes, lines
+    sync = movies.emdb_sync(emdb.movies(lines, config.EMDB_DATABASE), hdd)
+    return entries + sync.entries, sync, lines
+
+
+def choose_emdb_entries(sync: movies.Sync, ask=input) -> None:
+    """For each movie without an EMDB entry found: choose one of its year's, by number."""
+    for name, choices in sync.unmatched:
+        print(f"\n{name}: no EMDB entry found by its title and year.")
+        if not choices:
+            print("  No EMDB entry without a Location from its year: add the movie in EMDB, then run --fix again.")
+            continue
+        for i, movie in enumerate(choices, 1):
+            print(f"{i:>3} {movie.title} ({movie.year})")
+        selection = parse_selection(ask("Which one is it? (number; Enter: none) "), len(choices))
+        if selection and len(selection) == 1:
+            movie = choices[selection[0] - 1]
+            if sync.changes.get(movie.line):
+                print(f"  {movie.title} is taken already by another movie; skipped.")
+            else:
+                sync.changes[movie.line] = str(movies.main_file(movies.movies_dir() / name))
+                sync.entries.append(movies.Entry("Location to set", name, f"{movie.title} ({movie.year}), chosen"))
 
 
 def cmd_movie_status(args, ask=input) -> int:
     hdd = movies.find_hdd()
-    entries, changes, lines = movie_problems(hdd)
+    entries, sync, lines = movie_problems(hdd)
     problems = [e for e in entries if e.problem]
     for kind in dict.fromkeys(e.kind for e in (entries if args.verbose else problems)):
         these = [e for e in entries if e.kind == kind]
@@ -891,22 +910,30 @@ def cmd_movie_status(args, ask=input) -> int:
     old = [e for e in problems if e.kind == "old layout"]
     if old and agree(f"Move the movie annex's {config.MOVIE_ANNEX_OLD_ROOT} to {config.MOVIES}?"):
         movies.fix_layout(hdd)
-        entries, changes, lines = movie_problems(hdd)
+        entries, sync, lines = movie_problems(hdd)
     loose = [Path(e.detail) for e in entries if e.kind == "loose file"]
     if loose and agree(f"Put {len(loose)} loose movie file(s) into a folder of their own each?"):
         for file in loose:
             print(f"  {movies.wrap(file)}")
-        entries, changes, lines = movie_problems(hdd)
+        entries, sync, lines = movie_problems(hdd)
     missing = [e for e in entries if e.kind == "missing link"]
     if missing and agree(f"Create {len(missing)} missing link(s) on C:?"):
         for e in missing:
             target = movies.on_hdd(hdd) / e.name
             movies.create_link(movies.movies_dir() / e.name, movies.volume_path(target))
-        entries, changes, lines = movie_problems(hdd)
-    if changes:
-        emdb.check_safe_to_write(config.EMDB_DATABASE, annex.running_editors())
-        if agree(f"Change {len(changes)} Location(s) in EMDB's database?"):
-            emdb.write_lines(config.EMDB_DATABASE, emdb.with_locations(lines, changes))
+        entries, sync, lines = movie_problems(hdd)
+    if sync and (sync.changes or sync.unmatched):
+        emdb.check_safe_to_write(config.EMDB_DATABASE, annex.running_editors())  # before any choosing
+        choose_emdb_entries(sync, ask)
+        clears = [e for e in sync.entries if e.kind == "Location to clear"]
+        if clears:
+            print(f"\nLocations to clear, as their movie is gone ({len(clears)}):")
+            for e in clears:
+                print(f"  {e.name}: {e.detail}")
+        kinds = [e.kind for e in sync.entries if e.kind.startswith("Location ")]
+        counts = ", ".join(f"{kinds.count(k)} {k[len('Location '):]}" for k in dict.fromkeys(kinds))
+        if sync.changes and agree(f"\nChange {len(sync.changes)} Location(s) in EMDB's database ({counts})?"):
+            emdb.write_lines(config.EMDB_DATABASE, emdb.with_locations(lines, sync.changes))
             print(f"  changed; EMDB's backup of before: {emdb.newest_backup().parent}")
     left = [e for e in movie_problems(hdd)[0] if e.problem]
     print(f"{len(left)} problem(s) left." if left else "No problems left.")
@@ -1233,14 +1260,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_movie_from_annex)
 
-    p = add_command("movie-status", help="list where the movies are, and problems: missing links, and EMDB "
-                                         "Locations not pointing to Large\\Videos",
+    p = add_command("movie-status", help="list where the movies are, and problems: missing links, and where EMDB "
+                                         "doesn't match the movies in Large\\Videos",
                     description="List where the movies are (C: or the movie annex), and problems: the movie "
-                                "annex's old layout, loose movie files, missing or broken links, EMDB Locations "
-                                "that don't point to the movie in Large\\Videos, and movies not in EMDB. Without "
-                                "the movie annex, only what's on C: is checked. --fix asks before each kind of "
-                                "fix; it changes EMDB's database only while EMDB is closed and its newest backup "
-                                "(made in EMDB) is the current database.")
+                                "annex's old layout, loose movie files, missing or broken links, and where EMDB "
+                                "doesn't match the movies in Large\\Videos, which are the master: a movie added "
+                                "(its EMDB entry is found by title and year, else chosen from that year's), "
+                                "renamed (found by its file's name) or removed (its Location is cleared, the entry "
+                                "stays). Without the movie annex, only what's on C: is checked. --fix asks before "
+                                "each kind of fix; it changes EMDB's database only while EMDB is closed and its "
+                                "newest backup (made in EMDB) is the current database.")
     p.add_argument("--fix", action="store_true", help="fix what can be fixed (asks first)")
     p.add_argument("-v", "--verbose", action="store_true", help="also list the movies that are fine, and details")
     p.set_defaults(func=cmd_movie_status)

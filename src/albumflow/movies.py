@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import struct
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -214,9 +215,13 @@ KINDS = {
     "broken link": "a link whose folder on the movie annex is gone, or that points elsewhere",
     "in both places": "a folder on C: and on the movie annex; check by hand",
     "interrupted": "an interrupted move; run the same movie-to-annex/movie-from-annex again to continue",
-    "Location outdated": "EMDB's Location points elsewhere, but the movie is here; --fix changes it",
-    "Location not found": "EMDB's Location points to a file that is nowhere to be found",
-    "not in EMDB": "no EMDB Location points into it (add the movie in EMDB, or fix its Location)",
+    "Location outdated": "EMDB's Location points elsewhere (an old place, or the movie was renamed); --fix "
+                         "changes it",
+    "Location to set": "a movie that has an EMDB entry (by title and year), without a Location; --fix sets it",
+    "Location to clear": "EMDB's Location points to a movie that is gone; --fix clears it (the entry stays)",
+    "not in EMDB": "no EMDB entry found by its title and year; --fix offers that year's entries to choose from "
+                   "(or add it in EMDB, then run --fix again)",
+    "no movie file": "a folder without a movie file, so no Location can point to it",
 }
 
 
@@ -275,17 +280,34 @@ def status(hdd: Path | None) -> list[Entry]:
     return entries
 
 
-def location_fixes(movies: list[emdb.Movie], hdd: Path | None) -> tuple[dict[int, str], list[Entry]]:
-    """New Locations for EMDB's movies (by line), pointing to config.MOVIES on C:, and the problems found. Only
-    complete with the movie annex connected; without, the Locations to it are taken as they are."""
-    home_dir, changes, entries, used = movies_dir(), {}, [], set()
+@dataclass
+class Sync:
+    """What makes EMDB match the movies on disk, which are the master."""
+    changes: dict[int, str]  # EMDB line of a movie -> its new Location ("" clears it)
+    entries: list[Entry]  # the problems, fixable or not
+    unmatched: list[tuple[str, list[emdb.Movie]]]  # movies on disk without an EMDB entry: name, entries to choose from
+
+
+def emdb_sync(movies: list[emdb.Movie], hdd: Path | None) -> Sync:
+    """Each movie in config.MOVIES gets the EMDB entry whose Location points to it, on C:: Locations from the old
+    places are rewritten; a renamed movie is found by its file's name; a movie no Location points to gets the entry
+    with its title and year (from its folder name) that has no Location; the Location of a movie that is gone is
+    cleared (the entry stays, as for movies seen without a file). Without the movie annex, the movies on it, and
+    Locations that may point there, are left as they are."""
+    home_dir, sync = movies_dir(), Sync({}, [], [])
+    used = set()  # names (lower case) of the movies with an EMDB entry
+    gone = []  # EMDB movies whose Location points to a movie that isn't there
+
+    def link(movie: emdb.Movie, file: Path, kind: str, name: str, detail: str) -> None:
+        used.add(file.relative_to(home_dir).parts[0].lower())
+        if str(file) != movie.location:
+            sync.changes[movie.line] = str(file)
+            sync.entries.append(Entry(kind, name, detail))
+
     for movie in movies:
-        if not movie.location:
-            continue
-        path = emdb.without_label(movie.location)
-        rel = relative_movie_path(path)
+        rel = relative_movie_path(emdb.without_label(movie.location)) if movie.location else None
         if rel is None:
-            continue  # not a movie in config.MOVIES, nor where they were
+            continue  # no Location, or not to a movie in config.MOVIES, nor where they were
         top = home_dir / rel.parts[0]
         if not hdd and not (top.is_dir() and not is_link(top)):
             if is_link(top):
@@ -293,17 +315,81 @@ def location_fixes(movies: list[emdb.Movie], hdd: Path | None) -> tuple[dict[int
             continue  # (maybe) on the movie annex, not connected: can't check
         candidates = [home_dir / rel] + ([home_dir / Path(rel.name).stem / rel] if len(rel.parts) == 1 else [])
         found = next((c for c in candidates if c.is_file()), None)
-        if found is None:
-            entries.append(Entry("Location not found", movie.title, movie.location))
+        if found:
+            link(movie, found, "Location outdated", movie.title, f"{movie.location} -> {found}")
         else:
-            used.add(found.relative_to(home_dir).parts[0].lower())
-            if str(found) != movie.location:
-                changes[movie.line] = str(found)
-                entries.append(Entry("Location outdated", movie.title, f"{movie.location} -> {found}"))
-    for name in movie_names():
-        if name.lower() not in used:
-            entries.append(Entry("not in EMDB", name))
-    return changes, entries
+            gone.append(movie)
+
+    visible = [n for n in movie_names() if hdd or not is_link(home_dir / n)]
+    free = [n for n in visible if n.lower() not in used]
+    by_file_name: dict[str, list[Path]] = {}
+    for name in free:
+        for file in movie_files(home_dir / name):
+            by_file_name.setdefault(file.name.lower(), []).append(file)
+    for movie in list(gone):  # renamed: the file is in a movie without an EMDB entry
+        hits = by_file_name.get(Path(emdb.without_label(movie.location)).name.lower(), [])
+        if len(hits) == 1 and hits[0].relative_to(home_dir).parts[0].lower() not in used:
+            link(movie, hits[0], "Location outdated", movie.title, f"{movie.location} -> {hits[0]} (renamed)")
+            gone.remove(movie)
+
+    without = [m for m in movies if not m.location] + gone  # entries free to take a movie
+    for name in (n for n in free if n.lower() not in used):
+        file = main_file(home_dir / name)
+        if file is None:
+            sync.entries.append(Entry("no movie file", name))
+            continue
+        match = match_title(name, [m for m in without if m.line not in sync.changes])
+        if match:
+            link(match, file, "Location to set", name, f"{match.title} ({match.year})")
+            if match in gone:
+                gone.remove(match)
+        else:
+            years = [y for _, y in title_years(name)]
+            choices = sorted((m for m in without if m.line not in sync.changes and m.year.isdigit()
+                              and any(abs(int(m.year) - y) <= 1 for y in years)), key=lambda m: m.title.lower())
+            sync.unmatched.append((name, choices))
+            sync.entries.append(Entry("not in EMDB", name))
+    for movie in gone:
+        sync.changes[movie.line] = ""
+        sync.entries.append(Entry("Location to clear", movie.title, movie.location))
+    return sync
+
+
+def movie_files(folder: Path) -> list[Path]:
+    return [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in config.MOVIE_EXTENSIONS]
+
+
+def main_file(folder: Path) -> Path | None:
+    """The file EMDB's Location points to: the movie's largest movie file (e.g. of a Blu-ray's BDMV\\STREAM)."""
+    return max(movie_files(folder), key=lambda p: p.stat().st_size, default=None)
+
+
+def normal(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+
+def title_years(name: str) -> list[tuple[str, int]]:
+    """The ways to read a folder name as a title followed by its year, e.g. "1917.2019.BDREMUX" -> ("1917.", 2019)."""
+    found = []
+    for m in re.finditer(r"(?<!\d)(1[89]\d\d|20\d\d)(?!\d)", name):
+        if normal(name[:m.start()]):
+            found.append((name[:m.start()], int(m.group())))
+    return found
+
+
+def match_title(name: str, movies: list[emdb.Movie]) -> emdb.Movie | None:
+    """The EMDB movie a folder name stands for: its title, as whole words, before a year that is the movie's (±1,
+    as release years differ); the longest such title, if only one is the longest."""
+    hits = []
+    for prefix, year in title_years(name):
+        words = normal(prefix)
+        for movie in movies:
+            title = normal(movie.title)
+            if title and movie.year.isdigit() and abs(int(movie.year) - year) <= 1 and any(
+                    words[i:i + len(title)] == title for i in range(len(words) - len(title) + 1)):
+                hits.append((len(title), movie))
+    longest = [m for n, m in hits if n == max((n for n, _ in hits), default=0)]
+    return longest[0] if len({m.line for m in longest}) == 1 else None
 
 
 def relative_movie_path(path: str) -> Path | None:

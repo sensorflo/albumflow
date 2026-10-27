@@ -188,9 +188,8 @@ def test_migration(setup, capsys):
 
     assert cli.cmd_movie_status(args()) == 1
     assert "old layout (1)" in capsys.readouterr().out
-    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 1  # Gone stays a problem
-    out = capsys.readouterr().out
-    assert "1 problem(s) left" in out
+    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 0
+    assert "No problems left" in capsys.readouterr().out
 
     assert not old.exists()
     assert annex.is_link(videos / "Parasite.2019") and annex.is_link(videos / "1917.2019")
@@ -200,11 +199,92 @@ def test_migration(setup, capsys):
         "1917": str(videos / "1917.2019" / "1917.2019.mkv"),
         "The Fifth Element": str(videos / "Fifth Element" / "BDMV" / "00001.m2ts"),
         "Eraserhead": str(folder / "Eraserhead.mkv"),
-        "Gone": R"D:\Videos\Gone.mkv",
-        "Not a movie": R"C:\Users\senso\Documents\x.mkv",
+        "Gone": "",  # cleared, the entry stays
+        "Not a movie": R"C:\Users\senso\Documents\x.mkv",  # not in Large\Videos: none of its business
     }
-    entries, changes, _ = cli.movie_problems(hdd)
-    assert not changes and [e.name for e in entries if e.problem] == ["Gone"]
+    entries, sync, _ = cli.movie_problems(hdd)
+    assert not sync.changes and not [e for e in entries if e.problem]
+
+
+def movie(home, name, file="m.mkv", size=10):
+    path = home / "Large" / "Videos" / name / file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"m" * size)
+    return path
+
+
+def set_years(years):
+    """write_db gives every movie 2019; these get another year."""
+    lines = emdb.read_lines(config.EMDB_DATABASE)
+    for m in emdb.movies(lines):
+        fields = lines[m.line].split(SEP)
+        fields[0] = emdb.YEAR_PREFIX + years.get(m.title, "2019")
+        lines[m.line] = SEP.join(fields)
+    emdb.write_lines(config.EMDB_DATABASE, lines)
+
+
+def test_filesystem_is_the_master(setup, capsys):
+    """Movies added (found by title and year, or chosen), renamed (found by file name) and removed."""
+    home, hdd, folder = setup
+    videos = home / "Large" / "Videos"
+    parasite = movie(home, "Parasite.2019.KORAEN.1080p.BluRay.REMUX-FGT", "Parasite.mkv")
+    motors = movie(home, "Корпорация «Святые моторы» (Holy Motors) 2012, BDRemux", R"BDMV\STREAM\00001.m2ts", 50)
+    (motors.parent / "00002.m2ts").write_bytes(b"x")  # smaller: not the movie
+    renamed = movie(home, "Stalin (renamed)", "Death.of.Stalin.mkv")
+    eraserhead = folder / "Eraserhead.mkv"
+    write_db(config.EMDB_DATABASE, [
+        ("Parasite", ""), ("Parasite", ""),  # two entries could be it: no guess
+        ("Holy Motors", ""),
+        ("The Death of Stalin", str(videos / "The.Death.of.Stalin.2017" / "Death.of.Stalin.mkv")),
+        ("Removed", str(videos / "Removed" / "r.mkv")),
+        ("Eraserhead", str(eraserhead)),
+    ])
+    set_years({"Holy Motors": "2012"})
+    backup_db()
+
+    kinds = {(e.kind, e.name) for e in cli.movie_problems(hdd)[1].entries}
+    assert kinds == {("Location to set", motors.parents[2].name), ("Location outdated", "The Death of Stalin"),
+                     ("Location to clear", "Removed"), ("not in EMDB", parasite.parent.name)}
+
+    answers = iter(["1", "y"])  # the first Parasite, then yes
+    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: next(answers)) == 0
+    found = [(m.title, m.location) for m in emdb.movies(emdb.read_lines(config.EMDB_DATABASE))]
+    assert found == [("Parasite", str(parasite)), ("Parasite", ""), ("Holy Motors", str(motors)),
+                     ("The Death of Stalin", str(renamed)), ("Removed", ""), ("Eraserhead", str(eraserhead))]
+
+
+def test_movie_on_the_disconnected_hdd_keeps_its_location(setup, monkeypatch):
+    home, hdd, folder = setup
+    movies.to_hdd(folder.name, log=quiet)
+    write_db(config.EMDB_DATABASE, [("Eraserhead", str(folder / "Eraserhead.mkv")),
+                                    ("Old", R"D:\Videos\Old\o.mkv")])  # maybe on the HDD
+    monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(hdd / "gone"))
+    entries, sync, _ = cli.movie_problems(None)
+    assert not sync.changes and not [e for e in entries if e.problem]
+
+
+def test_not_in_emdb_without_a_choice(setup, capsys):
+    home, hdd, folder = setup
+    write_db(config.EMDB_DATABASE, [])
+    backup_db()
+    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 1
+    assert "add the movie in EMDB, then run --fix again" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name, title, year", [
+    ("1917.2019.BDREMUX.1080p.seleZen", "1917", "2019"),
+    ("Blade.Runner.2049.2017.BluRay.1080p", "Blade Runner 2049", "2017"),
+    ("2001.A.Space.Odyssey.1968.REMASTERED", "2001: A Space Odyssey", "1968"),
+    ("The.Death.of.Stalin.2017.1080p", "The Death of Stalin", "2018"),  # release years may differ by one
+    ("Eraserhead (1977) REMASTERED 1080p", "Eraserhead", "1977"),
+])
+def test_match_title(name, title, year):
+    assert movies.match_title(name, [emdb.Movie("Other", year, "", 2), emdb.Movie(title, year, "", 1)]).title == title
+
+
+def test_match_title_not():
+    assert movies.match_title("Upgrade.2018", [emdb.Movie("Up", "2018", "", 1)]) is None  # whole words only
+    assert movies.match_title("Dune.2021", [emdb.Movie("Dune", "1984", "", 1)]) is None
 
 
 def test_emdb_untouched_while_running(setup, monkeypatch):

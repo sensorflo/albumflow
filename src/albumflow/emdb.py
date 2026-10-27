@@ -27,6 +27,7 @@ LOCATION_FIELD = 7
 @dataclass
 class Movie:
     title: str
+    year: str
     location: str  # as EMDB shows it, e.g. "[FloBig]D:\Videos\x.mkv"
     line: int  # index of its YEAR_PREFIX line
 
@@ -61,7 +62,7 @@ def movies(lines: list[str], path: Path | str = "EMDB's database") -> list[Movie
             if len(fields) != FIELDS or title is None:
                 raise AlbumflowError(f"{path}, line {i + 1}: not the EMDB format albumflow knows "
                                      f"({len(fields)} fields instead of {FIELDS})")
-            found.append(Movie(title, decode(fields[LOCATION_FIELD]), i))
+            found.append(Movie(title, fields[0][len(YEAR_PREFIX):], decode(fields[LOCATION_FIELD]), i))
             title = None
     return found
 

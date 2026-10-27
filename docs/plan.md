@@ -352,14 +352,25 @@ mirroring the home folder like the annex: `<HDD>\Large\Videos\<movie>`.
   Without the HDD, a movie on it is missing for EMDB, as before.
 - `albumflow movie-status [--fix] [-v]`: where the movies are, and problems:
   the HDD's old layout, loose movie files (a link can only stand for a folder),
-  missing or broken links, in both places, interrupted moves, EMDB Locations
-  that are outdated or not found, movies no Location points into. Without the
-  HDD only what's on C: is checked. `--fix` asks per kind: move `<HDD>\Videos`
-  to `<HDD>\Large\Videos`; put each loose movie file (with files named like it,
-  e.g. subtitles) into a folder named like it; create the missing links;
-  rewrite outdated Locations (from `EMDB_OLD_MOVIE_ROOTS`, also with a
-  `[label]`, and for wrapped files) to their movie on C:, only where the file is
-  found there.
+  missing or broken links, in both places, interrupted moves, and where EMDB
+  doesn't match the movies. Without the HDD only what's on C: is checked.
+  `--fix` asks per kind: move `<HDD>\Videos` to `<HDD>\Large\Videos`; put each
+  loose movie file (with files named like it, e.g. subtitles) into a folder
+  named like it; create the missing links; make EMDB match.
+- **The filesystem is the master**; EMDB is also the catalog of movies seen
+  without a file (entries without a Location), and Locations outside
+  `Large\Videos` are none of albumflow's business. Each movie gets the EMDB
+  entry whose Location points to its largest movie file:
+  - outdated: a Location from `EMDB_OLD_MOVIE_ROOTS` (also with a `[label]`,
+    and for wrapped files) is rewritten to the movie on C:;
+  - renamed: a Location whose file is gone follows the file, found by its name
+    in a movie without an entry;
+  - added: a movie without an entry gets the one without a Location whose
+    title, as whole words, comes before a year in the folder name (±1);
+    otherwise `--fix` offers that year's entries to choose from by number. A
+    movie not in EMDB at all is added in EMDB (it looks it up online), then
+    `--fix` again; albumflow never creates entries;
+  - removed: a Location whose movie is gone is cleared; the entry stays.
 - emdb.dat (`%APPDATA%\EMDB`): UTF-16, JSON-like; each movie's `"year"` line
   holds 17 fields separated by `\x1e`, field 7 the Location (`[`/`]` written
   as `<SC>`/`<SCB>`). Only that field is changed, everything else stays byte
@@ -372,9 +383,10 @@ To do (once the HDD is connected):
 1. Put a `.movie-annex` file into the HDD's root.
 2. Make a backup in EMDB, close EMDB.
 3. `albumflow movie-status --fix`, answering y to each: the layout, loose
-   files, about 350 links, the Locations.
-4. `albumflow movie-status`: what's left (e.g. Locations not found, like
-   The Fifth Element and Enter the Void, assumed on the HDD).
+   files, about 350 links, the Locations (choosing Poor Things for
+   "Povere creature!"). Check the Locations to clear before agreeing: The
+   Fifth Element and Enter the Void are assumed on the HDD.
+4. `albumflow movie-status`: what's left.
 
 ## Terms: backups and drives
 
