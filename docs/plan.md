@@ -334,58 +334,113 @@ To do:
 - The annex treats every folder alike, `new\OnlyForOthers` included: it only
   exists because C: is too small; semantically there is one home folder tree.
 
-## Movies and the movie annex
+## Movies: store, view, movie annex, EMDB
 
-Movies are in `Large\Videos\<movie>`, each a folder. Most are on the **movie
-annex**, an external HDD that is often disconnected (marker `.movie-annex`),
-mirroring the home folder like the annex: `<HDD>\Large\Videos\<movie>`.
+`C:\Users\senso\Large\Videos` holds:
+
+- `Store\<release name>`: the movies as downloaded, **never renamed**, so
+  qBittorrent can go on seeding them. qBittorrent saves complete downloads here
+  (default save path) and keeps incomplete ones in `Downloading`, which
+  albumflow ignores; "Torrent content layout: Create subfolder", so a
+  single-file torrent gets a folder too.
+- `Videos\<canonical name>`: the **view**, only junctions, one per movie, to
+  its folder in a store. You, EMDB and VLC use it.
+- The **movie annex**: an external HDD, often disconnected (marker
+  `.movie-annex`), with the store at the same path,
+  `<HDD>\Large\Videos\Store\<release name>`. A junction to it points to its
+  **volume** (`\\?\Volume{...}\...`), not its drive letter; a junction to C:
+  by the plain path.
+- The backup leaves out everything below the first level of `Large\Videos`
+  (restic stores a junction as a link, never follows it); the README stays.
+
+Commands:
 
 - `albumflow movie-to-annex <movie>` / `movie-from-annex <movie>`: the movie by
-  name, words in it (a choice if several match), or path. Same crash-safe move
-  as the annex (`.part`, move note, checks, re-run continues).
-- The link has the **movie's own name**, without " (annex)": a movie always
-  moves as a whole, so folder and link never coexist. It points to the HDD's
-  **volume** (`\\?\Volume{...}\Large\Videos\<movie>`), not its drive letter. So
-  a movie's path never changes, wherever it is.
-- **EMDB's Location** always points to the movie on C:
-  (`C:\Users\senso\Large\Videos\<movie>\<file>`), so moves never touch EMDB.
-  Without the HDD, a movie on it is missing for EMDB, as before.
+  its name in the view or its release name, words in them (a choice if several
+  match), or a path. Same crash-safe move as the annex (`.part`, move note,
+  checks, re-run continues); the junction is pointed to the new place before
+  the old copy is deleted. A torrent being seeded is moved in qBittorrent
+  instead (Set location); `movie-status --fix` then points its junction there.
 - `albumflow movie-status [--fix] [-v]`: where the movies are, and problems:
-  the HDD's old layout, loose movie files (a link can only stand for a folder),
-  missing or broken links, in both places, interrupted moves, and where EMDB
-  doesn't match the movies. Without the HDD only what's on C: is checked.
-  `--fix` asks per kind: move `<HDD>\Videos` to `<HDD>\Large\Videos`; put each
-  loose movie file (with files named like it, e.g. subtitles) into a folder
-  named like it; create the missing links; make EMDB match.
-- **The filesystem is the master**; EMDB is also the catalog of movies seen
-  without a file (entries without a Location), and Locations outside
-  `Large\Videos` are none of albumflow's business. Each movie gets the EMDB
-  entry whose Location points to its largest movie file:
-  - outdated: a Location from `EMDB_OLD_MOVIE_ROOTS` (also with a `[label]`,
-    and for wrapped files) is rewritten to the movie on C:;
-  - renamed: a Location whose file is gone follows the file, found by its name
-    in a movie without an entry;
-  - added: a movie without an entry gets the one without a Location whose
-    title, as whole words, comes before a year in the folder name (±1);
-    otherwise `--fix` offers that year's entries to choose from by number. A
-    movie not in EMDB at all is added in EMDB (it looks it up online), then
-    `--fix` again; albumflow never creates entries;
-  - removed: a Location whose movie is gone is cleared; the entry stays.
-- emdb.dat (`%APPDATA%\EMDB`): UTF-16, JSON-like; each movie's `"year"` line
-  holds 17 fields separated by `\x1e`, field 7 the Location (`[`/`]` written
-  as `<SC>`/`<SCB>`). Only that field is changed, everything else stays byte
-  for byte; an unexpected format stops it. Written only while EMDB is closed
-  and the newest backup made in EMDB (`Documents\EMDB\Backups\EMDB_BACKUP_*`)
-  is byte for byte the current database; atomically.
+  the HDD's old layout, loose movie files, junctions missing, pointing
+  elsewhere (after qBittorrent moved a movie) or to a movie gone, in both
+  places, interrupted moves, names not canonical, and where EMDB doesn't match.
+  Hints, not problems: Locations too long for EMDB to play (over 259
+  characters; accepted), and language tags that are missing or contradict the
+  track's title (fixed by hand with MKVToolNix; albumflow never changes movie
+  files). `--fix` asks per kind: the layout, loose files, the junctions, then
+  the names and EMDB together.
+
+**Canonical names**: `<English title>[ - <original title>] (<year>)[
+{<edition>}] [<what the files hold>]`, e.g. `Parasite - 기생충 (2019) [1080p
+AVC 29Mbps, ko TrueHD Atmos 7.1, sub en +1]`.
+
+- Titles and year from EMDB (its main title is the English one; the original
+  title only when it differs). Windows-safe: `:` becomes ` - `, `/` `-`,
+  `?*"<>|` dropped, no dot at the end. "The ..." stays as it is.
+- The edition from the release name, after its (last) year: Remastered (also
+  RM4K), Director's Cut (also DC), Final Cut, Extended, Uncut, Unrated,
+  Theatrical, IMAX, Criterion, <n>th Anniversary (`movienames.EDITIONS`).
+- What the files hold, by MediaInfo (command line, `config.MEDIAINFO`; for a
+  Blu-ray folder its largest playlist, which knows the languages): resolution
+  (by width or height, so cropped movies keep theirs), HDR (DV, HDR10, HDR10+,
+  HLG), video codec and Mbit/s (from the stream, else the overall rate); audio
+  per language, the original (the first audio track's) then en, de
+  (`config.MOVIE_LANGUAGES`), each its best track (lossless, channels,
+  Atmos/DTS:X, default), alike ones combined, kbit/s for lossy formats only,
+  commentaries ignored, other languages counted (`+2`); subtitle languages the
+  same way, forced ones ignored.
+- MediaInfo's findings are kept in `%LOCALAPPDATA%\albumflow\mediainfo.json`
+  (by release and file, size and time), so names can be made while the HDD is
+  disconnected.
+- Variants: each has its own release folder and EMDB entry; a name taken
+  already gets ` (2)`.
+- A movie without an EMDB entry keeps its release name in the view until it
+  has one.
+
+**EMDB follows the files**, which are the master; EMDB is also the catalog of
+movies seen without a file (entries without a Location), and Locations that
+aren't a movie's are none of albumflow's business. Each movie gets the EMDB
+entry whose Location points to it, through the view, into a store, or into an
+old place (`EMDB_OLD_MOVIE_ROOTS`, also with a `[label]`, and for wrapped
+files); its Location becomes `<view>\<canonical name>\<file>`, the file it
+pointed to, else the movie's largest (for a Blu-ray the main `.m2ts`, whose
+codecs EMDB can read).
+
+- renamed: a Location whose movie is gone follows its file, found by name in a
+  movie without an entry;
+- added: a movie without an entry gets the one without a Location whose title,
+  as whole words, comes before a year in the release name (±1); otherwise
+  `--fix` offers that year's entries to choose from by number. A movie not in
+  EMDB at all is added in EMDB (it looks it up online), then `--fix` again;
+  albumflow never creates entries;
+- removed: a Location whose movie is gone is cleared (listed before asking);
+  the entry stays;
+- without the HDD, the movies on it, and Locations that may point there, are
+  left as they are.
+
+emdb.dat (`%APPDATA%\EMDB`): UTF-16, JSON-like; each movie's `"title"` line has
+the title and `#O<original title>`, its `"year"` line 17 fields separated by
+`\x1e`, field 0 the year, field 7 the Location (`[`/`]` written as
+`<SC>`/`<SCB>`). Only the Location is changed, everything else stays byte for
+byte; an unexpected format stops it. Written (and junctions renamed) only
+while EMDB is closed and the newest backup made in EMDB
+(`Documents\EMDB\Backups\EMDB_BACKUP_*`) is byte for byte the current
+database; atomically.
+
+Open: a Blu-ray folder whose movie is split into several clips (the main
+`.m2ts` much shorter than the playlist) could be reported, with a remux
+recommended.
 
 To do (once the HDD is connected):
 
 1. Put a `.movie-annex` file into the HDD's root.
 2. Make a backup in EMDB, close EMDB.
-3. `albumflow movie-status --fix`, answering y to each: the layout, loose
-   files, about 350 links, the Locations (choosing Poor Things for
-   "Povere creature!"). Check the Locations to clear before agreeing: The
-   Fifth Element and Enter the Void are assumed on the HDD.
+3. `albumflow movie-status --fix`, answering y to each: `<HDD>\Videos` becomes
+   `<HDD>\Large\Videos\Store`, loose files get folders, about 350 junctions,
+   then the names and Locations (choosing Poor Things for "Povere creature!").
+   Check the Locations to clear before agreeing: The Fifth Element and Enter
+   the Void are assumed on the HDD.
 4. `albumflow movie-status`: what's left.
 
 ## Terms: backups and drives

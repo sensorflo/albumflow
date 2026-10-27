@@ -15,8 +15,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, emdb, lightroom, movies,
-                       purge, index, selfcopy)
+from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, emdb, lightroom,
+                       mediainfo, movies, purge, index, selfcopy)
 from albumflow.exiftool import ExifTool
 from albumflow.files import AlbumflowError, volume_label
 
@@ -811,92 +811,106 @@ def cmd_annex_status(args) -> int:
     return 1
 
 
-def choose_movie(target: str, names: list[str], ask=input) -> str:
-    """A movie by its path or name, or by words in its name; a choice if several match."""
+def choose_movie(target: str, options: dict[str, str], ask=input) -> str:
+    """A movie's release name, given by its name in the view or its release name (options: name -> release), by
+    words in them, or by a path into the view or the store; a choice if several match."""
     if looks_like_path(target):
-        path = as_path(target)
-        if not annex.same_path(path.parent, movies.movies_dir()):
-            raise AlbumflowError(f"{path} is not a movie in {movies.movies_dir()}")
-        target = path.name
-    exact = [n for n in names if n.lower() == target.lower()]
+        target = as_path(target).name
+    exact = sorted({r for name, r in options.items() if target.lower() in (name.lower(), r.lower())})
     words = target.lower().split()
-    matches = exact or [n for n in names if all(w in n.lower() for w in words)]
+    matches = exact or sorted({r for name, r in options.items()
+                               if all(w in f"{name} {r}".lower() for w in words)}, key=str.lower)
     if not matches:
         raise AlbumflowError(f"No movie matches '{target}'")
     if len(matches) == 1:
         return matches[0]
-    for i, name in enumerate(matches, 1):
-        print(f"{i:>2} {name}")
+    labels = {r: name for name, r in options.items() if name != r}
+    for i, release in enumerate(matches, 1):
+        print(f"{i:>2} {labels.get(release, release)}" + (f"  ({release})" if release in labels else ""))
     selection = parse_selection(ask("Which one? (number; Enter: none): "), len(matches))
     if not selection or len(selection) != 1:
         raise AlbumflowError("No movie chosen")
     return matches[selection[0] - 1]
 
 
+def movie_options(on_c: bool) -> dict[str, str]:
+    """The movies in one store (on C:, or else on the movie annex), by their names in the view and their releases."""
+    found, _ = movies.collect(movies.find_hdd())
+    options = {}
+    for m in found.values():
+        if m.on_c if on_c else m.on_hdd:
+            options[m.release] = m.release
+            if m.link:
+                options[m.link] = m.release
+    return options
+
+
 def cmd_movie_to_annex(args) -> int:
-    folder = movies.movies_dir()
-    names = [n for n in movies.movie_names() if not annex.is_link(folder / n)]
-    name = choose_movie(args.movie, names)
+    release = choose_movie(args.movie, movie_options(on_c=True))
     display = ProgressDisplay()
-    movies.to_hdd(name, log=display.log, progress=display.bar("to movie annex"), dry_run=args.dry_run)
+    movies.to_hdd(release, log=display.log, progress=display.bar("to movie annex"), dry_run=args.dry_run)
     return 0
 
 
 def cmd_movie_from_annex(args) -> int:
-    folder = movies.movies_dir()
-    names = [n for n in movies.movie_names() if annex.is_link(folder / n)]
-    name = choose_movie(args.movie, names)
+    release = choose_movie(args.movie, movie_options(on_c=False))
     display = ProgressDisplay()
-    movies.from_hdd(name, log=display.log, progress=display.bar("from movie annex"), dry_run=args.dry_run)
+    movies.from_hdd(release, log=display.log, progress=display.bar("from movie annex"), dry_run=args.dry_run)
     return 0
 
 
-def movie_problems(hdd: Path | None) -> tuple[list[movies.Entry], movies.Sync | None, list[str] | None]:
-    """All entries (movies and problems), what makes EMDB match them, and EMDB's lines (both None without EMDB)."""
-    entries = movies.status(hdd)
+def movie_problems(hdd: Path | None, reader: mediainfo.Reader, chosen: dict | None = None):
+    """All entries (movies and problems), the movies, what makes the names and EMDB match them, and EMDB's lines
+    (both None without EMDB, or before the movie annex holds the store)."""
+    found, entries = movies.status(hdd)
     if any(e.kind == "old layout" for e in entries) or not config.EMDB_DATABASE.is_file():
-        return entries, None, None  # EMDB only once the movie annex mirrors the home folder
+        return entries, found, None, None
     lines = emdb.read_lines(config.EMDB_DATABASE)
-    sync = movies.emdb_sync(emdb.movies(lines, config.EMDB_DATABASE), hdd)
-    return entries + sync.entries, sync, lines
+    try:
+        sync = movies.emdb_sync(found, emdb.movies(lines, config.EMDB_DATABASE), hdd, reader, chosen)
+    finally:
+        reader.save()
+    return entries + sync.entries, found, sync, lines
 
 
-def choose_emdb_entries(sync: movies.Sync, ask=input) -> None:
-    """For each movie without an EMDB entry found: choose one of its year's, by number."""
-    for name, choices in sync.unmatched:
-        print(f"\n{name}: no EMDB entry found by its title and year.")
-        if not choices:
+def choose_emdb_entries(sync: movies.Sync, ask=input) -> dict:
+    """For each movie without an EMDB entry found: choose one of its year's, by number. Returns the chosen ones,
+    by release (lower case)."""
+    chosen = {}
+    for release, choices in sync.unmatched:
+        print(f"\n{release}: no EMDB entry found by its title and year.")
+        free = [e for e in choices if e not in chosen.values()]
+        if not free:
             print("  No EMDB entry without a Location from its year: add the movie in EMDB, then run --fix again.")
             continue
-        for i, movie in enumerate(choices, 1):
-            print(f"{i:>3} {movie.title} ({movie.year})")
-        selection = parse_selection(ask("Which one is it? (number; Enter: none) "), len(choices))
+        for i, entry in enumerate(free, 1):
+            print(f"{i:>3} {entry.title} ({entry.year})")
+        selection = parse_selection(ask("Which one is it? (number; Enter: none) "), len(free))
         if selection and len(selection) == 1:
-            movie = choices[selection[0] - 1]
-            if sync.changes.get(movie.line):
-                print(f"  {movie.title} is taken already by another movie; skipped.")
-            else:
-                sync.changes[movie.line] = str(movies.main_file(movies.movies_dir() / name))
-                sync.entries.append(movies.Entry("Location to set", name, f"{movie.title} ({movie.year}), chosen"))
+            chosen[release.lower()] = free[selection[0] - 1]
+    return chosen
+
+
+def print_movie_entries(entries: list[movies.Entry], verbose: bool) -> None:
+    for kind in dict.fromkeys(e.kind for e in entries if verbose or e.kind not in movies.OK_KINDS):
+        these = [e for e in entries if e.kind == kind]
+        hint = movies.KINDS.get(kind)
+        print(f"{kind} ({len(these)})" + (f": {hint}" if hint else ""))
+        for e in these if verbose else these[:10]:
+            print(f"  {e.name}" + (f"\n    {e.detail}" if verbose and e.detail else ""))
+        if len(these) > 10 and not verbose:
+            print(f"  ... and {len(these) - 10} more (-v lists all)")
 
 
 def cmd_movie_status(args, ask=input) -> int:
     hdd = movies.find_hdd()
-    entries, sync, lines = movie_problems(hdd)
+    reader = mediainfo.Reader()
+    entries, found, sync, lines = movie_problems(hdd, reader)
     problems = [e for e in entries if e.problem]
-    for kind in dict.fromkeys(e.kind for e in (entries if args.verbose else problems)):
-        these = [e for e in entries if e.kind == kind]
-        hint = movies.KINDS.get(kind)
-        print(f"{kind} ({len(these)})" + (f": {hint}" if hint else ""))
-        for e in these if args.verbose else these[:10]:
-            print(f"  {e.name}" + (f"\n    {e.detail}" if args.verbose and e.detail else ""))
-        if len(these) > 10 and not args.verbose:
-            print(f"  ... and {len(these) - 10} more (-v lists all)")
-    counts = {kind: sum(1 for e in entries if e.kind == kind) for kind in
-              ("on C:", "on the movie annex", "on the movie annex (not connected)")}
-    summary = (f"Movies: {counts['on C:']} on C:, "
-               f"{counts['on the movie annex'] + counts['on the movie annex (not connected)']} on the movie annex"
-               + ("" if hdd else " (not connected: not checked)"))
+    print_movie_entries(entries, args.verbose)
+    count = {kind: sum(1 for e in entries if e.kind == kind) for kind in movies.OK_KINDS}
+    summary = (f"Movies: {count['on C:']} on C:, {count['on the movie annex'] + count[movies.OK_KINDS[2]]} on the "
+               "movie annex" + ("" if hdd else " (not connected: not checked)"))
     if lines is None and config.EMDB_DATABASE.is_file():
         summary += "; EMDB not checked yet"
     print(f"{summary}; " + (f"{len(problems)} problem(s)." if problems else "no problems."))
@@ -906,25 +920,28 @@ def cmd_movie_status(args, ask=input) -> int:
     def agree(question: str) -> bool:
         return ask(f"{question} [y/N] ").strip().lower() == "y"
 
+    def again(chosen=None):
+        return movie_problems(hdd, reader, chosen)
+
     print()
-    old = [e for e in problems if e.kind == "old layout"]
-    if old and agree(f"Move the movie annex's {config.MOVIE_ANNEX_OLD_ROOT} to {config.MOVIES}?"):
+    if any(e.kind == "old layout" for e in problems) \
+            and agree(f"Move the movie annex's {config.MOVIE_ANNEX_OLD_ROOT} to {config.MOVIE_STORE}?"):
         movies.fix_layout(hdd)
-        entries, sync, lines = movie_problems(hdd)
+        entries, found, sync, lines = again()
     loose = [Path(e.detail) for e in entries if e.kind == "loose file"]
     if loose and agree(f"Put {len(loose)} loose movie file(s) into a folder of their own each?"):
         for file in loose:
             print(f"  {movies.wrap(file)}")
-        entries, sync, lines = movie_problems(hdd)
-    missing = [e for e in entries if e.kind == "missing link"]
-    if missing and agree(f"Create {len(missing)} missing link(s) on C:?"):
-        for e in missing:
-            target = movies.on_hdd(hdd) / e.name
-            movies.create_link(movies.movies_dir() / e.name, movies.volume_path(target))
-        entries, sync, lines = movie_problems(hdd)
-    if sync and (sync.changes or sync.unmatched):
-        emdb.check_safe_to_write(config.EMDB_DATABASE, annex.running_editors())  # before any choosing
-        choose_emdb_entries(sync, ask)
+        entries, found, sync, lines = again()
+    links = [e for e in entries if e.kind in ("missing link", "link to fix", "movie gone")]
+    if links and agree(f"Fix {len(links)} link(s) in the view (create, point to the movie, remove)?"):
+        movies.fix_links(found, links, hdd)
+        entries, found, sync, lines = again()
+    if sync and (sync.changes or sync.unmatched or sync.renames):
+        if sync.changes or sync.unmatched:
+            emdb.check_safe_to_write(config.EMDB_DATABASE, annex.running_editors())  # before any choosing
+        if chosen := choose_emdb_entries(sync, ask):
+            entries, found, sync, lines = again(chosen)
         clears = [e for e in sync.entries if e.kind == "Location to clear"]
         if clears:
             print(f"\nLocations to clear, as their movie is gone ({len(clears)}):")
@@ -932,10 +949,15 @@ def cmd_movie_status(args, ask=input) -> int:
                 print(f"  {e.name}: {e.detail}")
         kinds = [e.kind for e in sync.entries if e.kind.startswith("Location ")]
         counts = ", ".join(f"{kinds.count(k)} {k[len('Location '):]}" for k in dict.fromkeys(kinds))
-        if sync.changes and agree(f"\nChange {len(sync.changes)} Location(s) in EMDB's database ({counts})?"):
-            emdb.write_lines(config.EMDB_DATABASE, emdb.with_locations(lines, sync.changes))
-            print(f"  changed; EMDB's backup of before: {emdb.newest_backup().parent}")
-    left = [e for e in movie_problems(hdd)[0] if e.problem]
+        question = " and ".join(([f"rename {len(sync.renames)} movie(s) in the view"] if sync.renames else [])
+                                + ([f"change {len(sync.changes)} Location(s) in EMDB ({counts})"]
+                                   if sync.changes else []))
+        if question and agree(f"\n{question[0].upper()}{question[1:]}?"):
+            movies.rename_links(sync.renames)
+            if sync.changes:
+                emdb.write_lines(config.EMDB_DATABASE, emdb.with_locations(lines, sync.changes))
+                print(f"  EMDB changed; its backup of before: {emdb.newest_backup().parent}")
+    left = [e for e in again()[0] if e.problem]
     print(f"{len(left)} problem(s) left." if left else "No problems left.")
     return 1 if left else 0
 
@@ -1246,30 +1268,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="also list the folders that are fine")
     p.set_defaults(func=cmd_annex_status)
 
-    movie_help = "its name, or words in it (a choice if several match), or its path"
-    p = add_command("movie-to-annex", help="move a movie to the movie annex (the HDD), leaving a link with its name",
-                    description="Move a movie (a folder in Large\\Videos) to the movie annex, the HDD with a "
-                                f"{config.MOVIE_ANNEX_MARKER} file, leaving a link with the movie's name, pointing "
-                                "to the HDD's volume. So its path, and EMDB's Location, stay the same.")
+    movie_help = "its name in the view or its release name, or words in them (a choice if several match), or a path"
+    p = add_command("movie-to-annex", help="move a movie from the store on C: to the movie annex (the HDD); its "
+                                           "link in the view then points there",
+                    description=f"Move a movie from the store on C: ({config.MOVIE_STORE}) to the movie annex, the "
+                                f"HDD with a {config.MOVIE_ANNEX_MARKER} file. Its link in the view "
+                                f"({config.MOVIE_VIEW}) then points there, by the HDD's volume, so its name, and "
+                                "EMDB's Location, stay the same. For a torrent qBittorrent is seeding, move it in "
+                                "qBittorrent instead (Set location); movie-status --fix then points the link there.")
     p.add_argument("movie", help=movie_help)
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_movie_to_annex)
 
-    p = add_command("movie-from-annex", help="move a movie back from the movie annex, replacing its link")
+    p = add_command("movie-from-annex", help="move a movie from the movie annex back to the store on C:")
     p.add_argument("movie", help=movie_help)
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_movie_from_annex)
 
-    p = add_command("movie-status", help="list where the movies are, and problems: missing links, and where EMDB "
-                                         "doesn't match the movies in Large\\Videos",
-                    description="List where the movies are (C: or the movie annex), and problems: the movie "
-                                "annex's old layout, loose movie files, missing or broken links, and where EMDB "
-                                "doesn't match the movies in Large\\Videos, which are the master: a movie added "
-                                "(its EMDB entry is found by title and year, else chosen from that year's), "
+    p = add_command("movie-status", help="list where the movies are, and problems: links in the view, names, and "
+                                         "where EMDB doesn't match the movies",
+                    description=f"List where the movies are (in the store, {config.MOVIE_STORE}, on C: or the "
+                                "movie annex), and problems: the movie annex's old layout, loose movie files, links "
+                                f"in the view ({config.MOVIE_VIEW}) missing or pointing elsewhere (e.g. after "
+                                "qBittorrent moved a movie), names that aren't canonical (English title - original "
+                                "title (year) {edition} [what the files hold], from EMDB, the release name and "
+                                "MediaInfo), and where EMDB doesn't match the movies, which are the master: a movie "
+                                "added (its EMDB entry is found by title and year, else chosen from that year's), "
                                 "renamed (found by its file's name) or removed (its Location is cleared, the entry "
-                                "stays). Without the movie annex, only what's on C: is checked. --fix asks before "
-                                "each kind of fix; it changes EMDB's database only while EMDB is closed and its "
-                                "newest backup (made in EMDB) is the current database.")
+                                "stays). Without the movie annex, the movies on it are taken as they are. --fix asks "
+                                "before each kind of fix; it renames movies and changes EMDB's database only while "
+                                "EMDB is closed and its newest backup (made in EMDB) is the current database.")
     p.add_argument("--fix", action="store_true", help="fix what can be fixed (asks first)")
     p.add_argument("-v", "--verbose", action="store_true", help="also list the movies that are fine, and details")
     p.set_defaults(func=cmd_movie_status)

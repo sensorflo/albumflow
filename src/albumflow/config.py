@@ -145,22 +145,33 @@ ANNEX_AGE_DAYS = 180
 # digikam.exe, which may run during moves).
 APPS_MODIFYING_FILES = {"darktable.exe", "ansel.exe", "Lightroom.exe", "emdb.exe"}
 
-# Movies: <MOVIES>\<movie> (relative to HOME_FOLDER), each a folder. Most are on the movie annex, an external HDD
-# that is often disconnected, mirroring the home folder like the annex: <movie annex>\<MOVIES>\<movie>. At the
-# movie's place on C: there is a junction with the movie's own name (a movie always moves as a whole), pointing to
-# the HDD's volume rather than its drive letter. So a movie's path, and EMDB's Location, never change.
-MOVIES = R"Large\Videos"
+# Movies (relative to HOME_FOLDER). The store holds them as downloaded, <MOVIE_STORE>\<release name>, never renamed
+# (qBittorrent may still be seeding them): on C:, or on the movie annex, an external HDD that is often disconnected,
+# at the same path, <movie annex>\<MOVIE_STORE>\<release name>. The view, <MOVIE_VIEW>\<canonical name>, holds only
+# junctions to them, named from EMDB and the files (movienames.py); EMDB's Locations point through the view. A
+# junction to the movie annex points to its volume rather than its drive letter. qBittorrent downloads into
+# Large\Videos\Downloading, moving a complete download into the store; albumflow ignores Downloading.
+MOVIE_STORE = R"Large\Videos\Store"
+MOVIE_VIEW = R"Large\Videos\Videos"
 MOVIE_ANNEX_MARKER = ".movie-annex"
-# Folders in MOVIES that aren't movies (Windows' and NVIDIA's screen recordings)
-NOT_MOVIES = ["Captures", "NVIDIA"]
 MOVIE_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts", ".webm"}
-# EMDB (Eric's Movie Database): its database, and the folder its backups (File > Backup) go to
+# EMDB (Eric's Movie Database): its database, and the folder the backups made in EMDB go to
 EMDB_DATABASE = Path(os.environ.get("ALBUMFLOW_EMDB", R"C:\Users\senso\AppData\Roaming\EMDB\emdb.dat"))
 EMDB_BACKUPS = Path(R"C:\Users\senso\Documents\EMDB\Backups")
-# Where the movie annex had the movies before it mirrored the home folder (as EMDB's Locations still say); movie-status
-# --fix moves them to <movie annex>\<MOVIES> and points the Locations there
+# EMDB doesn't show a Location longer than this as playable
+EMDB_MAX_PATH = 259
+# Where the movie annex had the movies before it held the store (as EMDB's Locations still say); movie-status --fix
+# moves them to <movie annex>\<MOVIE_STORE> and points the Locations to the view. Locations into the old places,
+# <old root>\<release name>\..., are taken as pointing into the store.
 MOVIE_ANNEX_OLD_ROOT = "Videos"
-EMDB_OLD_MOVIE_ROOTS = [R"D:\Videos", R"S:\media\sensorflo\7e0fb0f5-7af1-4290-8fe5-e6a35b6c12b8\Videos"]
+EMDB_OLD_MOVIE_ROOTS = [R"D:\Videos", R"S:\media\sensorflo\7e0fb0f5-7af1-4290-8fe5-e6a35b6c12b8\Videos",
+                        R"C:\Users\senso\Large\Videos"]
+# MediaInfo's command line version, and what albumflow keeps of its findings, so names can be made while the movie
+# annex is disconnected
+MEDIAINFO = Path(os.environ.get("ALBUMFLOW_MEDIAINFO", R"C:\Program Files\MediaInfo CLI\MediaInfo.exe"))
+MEDIAINFO_CACHE = Path(R"C:\Users\senso\AppData\Local\albumflow\mediainfo.json")
+# The languages a movie's name lists, after its original language (its first audio track's); others are counted
+MOVIE_LANGUAGES = ["en", "de"]
 
 # Lightroom catalogs, read (never written) before folders are moved to or from the annex.
 LIGHTROOM_CATALOGS = [Path(r"C:\Users\senso\Large\Pictures\Lightroom\Lightroom Catalog.lrcat")]

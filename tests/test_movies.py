@@ -4,20 +4,23 @@ from pathlib import Path
 
 import pytest
 
-from albumflow import annex, cli, config, emdb, movies
+from albumflow import annex, cli, config, emdb, mediainfo, movienames, movies
 from albumflow.files import AlbumflowError
 
 SEP = emdb.SEPARATOR
 
 
-def record(title, location):
-    year = ["2019", "0", "118", "#US", "10106", "12", "1920x1080", emdb.encode(location)] + ["0"] * 9
-    return ["    }, {", f'{emdb.TITLE_PREFIX}{title}{SEP}{SEP}{SEP}-1",', f"{emdb.YEAR_PREFIX}{SEP.join(year)}\",",
-            '        "plot": "x"']
+# --- helpers ---
+
+def record(title, location, original="", year="2019"):
+    fields = [year, "0", "118", "#US", "10106", "12", "1920x1080", emdb.encode(location)] + ["0"] * 9
+    return ["    }, {", f'{emdb.TITLE_PREFIX}{title}{SEP}{"#O" + original if original else ""}{SEP}{SEP}-1",',
+            f"{emdb.YEAR_PREFIX}{SEP.join(fields)}\",", '        "plot": "x"']
 
 
 def write_db(path, entries):
-    lines = ["{", '    "version": "80",', '    "movies": [{'] + [l for t, loc in entries for l in record(t, loc)] + ["}"]
+    """entries: (title, location) or (title, location, original, year)"""
+    lines = ["{", '    "version": "80",', '    "movies": [{'] + [l for e in entries for l in record(*e)] + ["}"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(emdb.BOM + "\r\n".join(lines).encode("utf-16-le"))
 
@@ -32,6 +35,26 @@ def locations():
     return {m.title: m.location for m in emdb.movies(emdb.read_lines(config.EMDB_DATABASE))}
 
 
+def video(width=1920, height=1080, fmt="AVC", rate=29e6, hdr=""):
+    return {"@type": "Video", "Format": fmt, "Width": str(width), "Height": str(height), "BitRate": str(int(rate)),
+            "HDR_Format": hdr}
+
+
+def audio(lang, fmt="FLAC", ch=2, rate=None, commercial="", features="", title="", default="No"):
+    track = {"@type": "Audio", "Format": fmt, "Channels": str(ch), "Language": lang, "Title": title,
+             "Format_Commercial_IfAny": commercial, "Format_AdditionalFeatures": features, "Default": default}
+    if rate:
+        track["BitRate"] = str(rate)
+    return track
+
+
+def sub(lang, forced="No", title=""):
+    return {"@type": "Text", "Format": "UTF-8", "Language": lang, "Forced": forced, "Title": title}
+
+
+ERASERHEAD_TRACKS = [{"@type": "General"}, video(1920, 1040, rate=8.8e6), audio("en"), sub("en")]
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     home, hdd = tmp_path / "home", tmp_path / "hdd"
@@ -39,65 +62,111 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME_FOLDER", home)
     monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(hdd))
     monkeypatch.setattr(annex, "running_editors", lambda: [])
-    folder = home / "Large" / "Videos" / "Eraserhead (1977)"
-    folder.mkdir(parents=True)
-    (folder / "Eraserhead.mkv").write_bytes(b"e" * 100)
-    (folder / "Featurettes").mkdir()
-    (folder / "Featurettes" / "a.mkv").write_bytes(b"a" * 10)
-    return home, hdd, folder
+    tracks = {}  # file name -> MediaInfo's tracks; others: Eraserhead's
+    runs = []
+
+    def fake_run(path):
+        runs.append(path.name)
+        return tracks.get(path.name, ERASERHEAD_TRACKS)
+    monkeypatch.setattr(mediainfo, "run", fake_run)
+    release = movie(home, "Eraserhead (1977) REMASTERED 1080p H264 FLAC", "Eraserhead.mkv", 100)
+    (release.parent / "Featurettes").mkdir()
+    (release.parent / "Featurettes" / "a.mkv").write_bytes(b"a" * 10)
+    return argparse.Namespace(home=home, hdd=hdd, release=release.parent, tracks=tracks, runs=runs,
+                              view=home / "Large" / "Videos" / "Videos")
+
+
+def movie(root, release, file="m.mkv", size=10, store=None):
+    path = (store or root / config.MOVIE_STORE) / release / file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"m" * size)
+    return path
 
 
 def quiet(*_):
     pass
 
 
-def test_to_annex_and_back(setup):
-    home, hdd, folder = setup
-    target = movies.to_hdd(folder.name, log=quiet)
-    assert target == hdd / "Large" / "Videos" / folder.name
-    assert annex.is_link(folder)  # the link has the movie's own name
-    assert (folder / "Featurettes" / "a.mkv").read_bytes() == b"a" * 10  # readable through it
-    assert not (target / annex.MOVE_NOTE).exists()
-    assert [e.kind for e in movies.status(hdd)] == ["on the movie annex"]
+def args(**kw):
+    return argparse.Namespace(**{"fix": False, "verbose": False, **kw})
 
-    movies.from_hdd(folder.name, log=quiet)
-    assert not annex.is_link(folder) and (folder / "Eraserhead.mkv").read_bytes() == b"e" * 100
-    assert not target.exists() and not (folder / annex.MOVE_NOTE).exists()
-    assert [e.kind for e in movies.status(hdd)] == ["on C:"]
+
+def kinds(entries):
+    return sorted((e.kind, e.name) for e in entries)
+
+
+def link_all(hdd):
+    found, entries = movies.status(hdd)
+    movies.fix_links(found, entries, hdd, log=quiet)
+
+
+# --- store and view ---
+
+def test_links_and_moves(setup):
+    s = setup
+    link_all(s.hdd)
+    link = s.view / s.release.name
+    assert annex.is_link(link) and (link / "Eraserhead.mkv").read_bytes() == b"m" * 100
+    assert kinds(movies.status(s.hdd)[1]) == [("on C:", s.release.name)]
+
+    target = movies.to_hdd(s.release.name, log=quiet)
+    assert target == s.hdd / config.MOVIE_STORE / s.release.name and not s.release.exists()
+    assert (link / "Featurettes" / "a.mkv").read_bytes() == b"a" * 10  # the link points there now
+    assert not (target / annex.MOVE_NOTE).exists()
+    assert kinds(movies.status(s.hdd)[1]) == [("on the movie annex", s.release.name)]
+
+    movies.from_hdd(s.release.name, log=quiet)
+    assert s.release.is_dir() and not target.exists() and not (s.release / annex.MOVE_NOTE).exists()
+    assert movies.same_target(link, str(s.release))
 
 
 def test_dry_run_changes_nothing(setup):
-    home, hdd, folder = setup
-    movies.to_hdd(folder.name, log=quiet, dry_run=True)
-    assert folder.is_dir() and not annex.is_link(folder) and not (hdd / "Large").exists()
+    movies.to_hdd(setup.release.name, log=quiet, dry_run=True)
+    assert setup.release.is_dir() and not (setup.hdd / "Large").exists()
 
 
 def test_resume_after_a_delete_stopped_halfway(setup):
-    """E.g. a file open in a player: the copy is complete, only the rest is deleted, then linked."""
-    home, hdd, folder = setup
-    target = hdd / "Large" / "Videos" / folder.name
-    annex.write_note(target, "movie-to-annex", folder)
-    annex.copy_tree(folder, target)
-    (folder / "Featurettes" / "a.mkv").unlink()  # deleted already
-    movies.to_hdd(folder.name, log=quiet)
-    assert annex.is_link(folder) and (target / "Featurettes" / "a.mkv").is_file()
+    """E.g. a file open in a player: the copy is complete, only the rest is deleted."""
+    s = setup
+    target = s.hdd / config.MOVIE_STORE / s.release.name
+    annex.write_note(target, "movie-to-annex", s.release)
+    annex.copy_tree(s.release, target)
+    (s.release / "Featurettes" / "a.mkv").unlink()  # deleted already
+    movies.to_hdd(s.release.name, log=quiet)
+    assert not s.release.exists() and (target / "Featurettes" / "a.mkv").is_file()
 
 
-def test_refuses_what_is_already_there(setup):
-    home, hdd, folder = setup
-    (hdd / "Large" / "Videos" / folder.name).mkdir(parents=True)
-    with pytest.raises(AlbumflowError, match="already exists"):
-        movies.to_hdd(folder.name, log=quiet)
-    assert [e.kind for e in movies.status(hdd)] == ["in both places"]
+def test_moved_by_qbittorrent(setup):
+    """qBittorrent's Set location moves the folder; the link is then pointed there."""
+    s = setup
+    link_all(s.hdd)
+    (s.hdd / config.MOVIE_STORE).mkdir(parents=True)
+    os.rename(s.release, s.hdd / config.MOVIE_STORE / s.release.name)
+    found, entries = movies.status(s.hdd)
+    assert kinds(entries) == [("link to fix", s.release.name)]
+    movies.fix_links(found, entries, s.hdd, log=quiet)
+    assert kinds(movies.status(s.hdd)[1]) == [("on the movie annex", s.release.name)]
 
 
 def test_without_the_hdd(setup, monkeypatch):
-    home, hdd, folder = setup
-    movies.to_hdd(folder.name, log=quiet)
-    monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(hdd / "gone"))
-    assert [e.kind for e in movies.status(movies.find_hdd())] == ["on the movie annex (not connected)"]
+    s = setup
+    link_all(s.hdd)
+    movies.to_hdd(s.release.name, log=quiet)
+    monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(s.hdd / "gone"))
+    assert kinds(movies.status(None)[1]) == [("not on C: (movie annex not connected)", s.release.name)]
     with pytest.raises(AlbumflowError, match="not connected"):
-        movies.from_hdd(folder.name, log=quiet)
+        movies.from_hdd(s.release.name, log=quiet)
+
+
+def test_gone_and_foreign(setup):
+    s = setup
+    link_all(s.hdd)
+    annex.delete_tree(s.release, s.home)
+    (s.view / "a folder").mkdir()
+    found, entries = movies.status(s.hdd)
+    assert kinds(entries) == [("movie gone", s.release.name), ("not a link", "a folder")]
+    movies.fix_links(found, entries, s.hdd, log=quiet)
+    assert not os.path.lexists(s.view / s.release.name)
 
 
 def test_link_to_a_volume(tmp_path, monkeypatch):
@@ -109,31 +178,78 @@ def test_link_to_a_volume(tmp_path, monkeypatch):
     assert target.startswith("\\\\?\\Volume{")
     movies.create_link(tmp_path / "link", target)
     assert (tmp_path / "link" / "m.mkv").read_text() == "m"
-    assert movies.same_target(tmp_path / "link", target)
+    assert movies.same_target(tmp_path / "link", target) and movies.release_of(os.readlink(tmp_path / "link")) == "movie"
     os.rmdir(tmp_path / "link")
     assert (tmp_path / "movie" / "m.mkv").is_file()
 
 
-def test_choose_movie(setup):
-    names = ["Eraserhead (1977)", "Parasite.2019", "The.Death.of.Stalin.2017"]
-    assert cli.choose_movie("parasite", names) == "Parasite.2019"
-    assert cli.choose_movie("death stalin", names) == "The.Death.of.Stalin.2017"
-    assert cli.choose_movie("20", names, ask=lambda _: "2") == "The.Death.of.Stalin.2017"  # two contain 20
+def test_choose_movie():
+    options = {"Eraserhead (1977) [x]": "Eraserhead.1977", "Eraserhead.1977": "Eraserhead.1977",
+               "Parasite.2019": "Parasite.2019", "The.Death.of.Stalin.2017": "The.Death.of.Stalin.2017"}
+    assert cli.choose_movie("parasite", options) == "Parasite.2019"
+    assert cli.choose_movie("eraserhead", options) == "Eraserhead.1977"  # by both names: one movie
+    assert cli.choose_movie("death stalin", options) == "The.Death.of.Stalin.2017"
+    assert cli.choose_movie("20", options, ask=lambda _: "2") == "The.Death.of.Stalin.2017"
     with pytest.raises(AlbumflowError):
-        cli.choose_movie("nothing", names)
+        cli.choose_movie("nothing", options)
+
+
+# --- names ---
+
+@pytest.mark.parametrize("release, edition", [
+    ("Donnie.Darko.2001.REMASTERED.Directors.Cut.1080p.BluRay-FGT", "Remastered, Director's Cut"),
+    ("Apocalypse.Now.1979.Final.Cut.2160p.UHD.BluRay", "Final Cut"),
+    ("Strange.Days.1995.20th.Anniv.GER.Bluray.1080p", "20th Anniversary"),
+    ("Any Given Sunday 1999 DC 1080p BluRay DTS x264-CtrlHD", "Director's Cut"),
+    ("The.Discreet.Charm.of.the.Bourgeoisie.1972.RM4K.1080p", "Remastered"),
+    ("The.Final.Cut.2004.1080p.BluRay", ""),  # a title, not an edition
+    ("Parasite.2019.KORAEN.1080p.BluRay.REMUX", ""),
+])
+def test_edition(release, edition):
+    assert movienames.edition(release) == edition
+
+
+def test_canonical_and_safe():
+    assert movienames.canonical("Parasite", "기생충", "2019", "Parasite.2019.1080p", "1080p AVC 29Mbps") \
+        == "Parasite - 기생충 (2019) [1080p AVC 29Mbps]"
+    assert movienames.canonical("2001: A Space Odyssey", "", "1968", "2001.A.Space.Odyssey.1968.REMASTERED", None) \
+        == "2001 - A Space Odyssey (1968) {Remastered}"
+    assert movienames.canonical("Holy Motors", "Holy Motors", "2012", "x", None) == "Holy Motors (2012)"
+    assert movienames.safe('Face/Off: What? "Now" *|<>.') == "Face-Off - What Now"
+
+
+def test_describe():
+    parasite = [{"@type": "General"}, video(),
+                audio("ko", "MLP FBA", 8, commercial="Dolby TrueHD with Dolby Atmos", features="16-ch"),
+                audio("ko", "DTS", 8, commercial="DTS-HD Master Audio", features="XLL"),
+                audio("en", "AC-3", 6, rate=640000, title="English"), audio("de", "AC-3", 6, rate=640000),
+                audio("es-419", "AC-3", 2, rate=192000), audio("en", "AC-3", 2, rate=192000, title="Commentary"),
+                sub("en"), sub("fr"), sub("de", forced="Yes"), sub("it", title="Italian Forced")]
+    assert mediainfo.describe(parasite) == "1080p AVC 29Mbps, ko TrueHD Atmos 7.1, en de AC3 5.1 640kbps, +1, sub en +1"
+    discreet = [{"@type": "General", "OverallBitRate": "5200000"}, video(1792, 1080, "HEVC", 0)]
+    discreet += [audio(lang, ch=1) for lang in ("fr", "en", "de")] + [sub("en"), sub("de"), sub("fr")]
+    assert mediainfo.describe(discreet) == "1080p HEVC 5Mbps, fr en de FLAC 1.0, sub fr en de"
+    assert mediainfo.describe([video(3840, 1600, "HEVC", 18e6, "Dolby Vision, HDR10")]) == "2160p DV HDR10 HEVC 18Mbps"
+    assert mediainfo.describe([{"@type": "General"}]) is None  # e.g. not downloaded completely
+
+
+def test_doubtful_languages():
+    found = mediainfo.doubtful_languages([audio("en", title="German DD 5.1"), audio("und"), audio("de", title="DD")])
+    assert found == ["audio track tagged en, titled 'German DD 5.1'", "audio track without a language ('')"]
 
 
 # --- EMDB ---
 
 def test_emdb_round_trip_and_location_change(tmp_path):
     path = tmp_path / "emdb.dat"
-    write_db(path, [("1917", R"[FloBig]D:\Videos\1917 [BluRay].mkv"), ("No file", "")])
+    write_db(path, [("1917", R"[FloBig]D:\Videos\1917 [BluRay].mkv"), ("Parasite", "", "기생충")])
     raw = path.read_bytes()
     lines = emdb.read_lines(path)
     emdb.write_lines(path, lines)
     assert path.read_bytes() == raw  # unchanged when nothing changes
     found = emdb.movies(lines)
-    assert [(m.title, m.location) for m in found] == [("1917", R"[FloBig]D:\Videos\1917 [BluRay].mkv"), ("No file", "")]
+    assert [(m.title, m.original, m.location) for m in found] == [
+        ("1917", "", R"[FloBig]D:\Videos\1917 [BluRay].mkv"), ("Parasite", "기생충", "")]
     assert emdb.without_label(found[0].location) == R"D:\Videos\1917 [BluRay].mkv"
     assert "<SC>BluRay<SCB>" in raw.decode("utf-16")
     emdb.write_lines(path, emdb.with_locations(lines, {found[0].line: R"C:\x\1917 [BluRay].mkv"}))
@@ -160,27 +276,21 @@ def test_emdb_written_only_when_closed_and_backed_up(tmp_path):
         emdb.check_safe_to_write(config.EMDB_DATABASE, [])
 
 
-def args(**kw):
-    return argparse.Namespace(**{"fix": False, "verbose": False, **kw})
-
-
 def test_migration(setup, capsys):
-    """The HDD's old layout, a loose movie file, links, and EMDB's Locations, fixed in one go."""
-    home, hdd, folder = setup
-    old = hdd / "Videos"
-    (old / "Parasite.2019").mkdir(parents=True)
-    (old / "Parasite.2019" / "Parasite.mkv").write_bytes(b"p")
+    """The HDD's old layout, a loose movie file, links, names and EMDB's Locations, fixed in one go."""
+    s = setup
+    old = s.hdd / "Videos"
+    movie(s.hdd, "Parasite.2019.KORAEN.1080p", "Parasite.mkv", store=old)
     (old / "1917.2019.mkv").write_bytes(b"1")
     (old / "1917.2019.en.srt").write_text("s")
-    (old / "Fifth Element" / "BDMV").mkdir(parents=True)
-    (old / "Fifth Element" / "BDMV" / "00001.m2ts").write_bytes(b"f")
-    videos = home / "Large" / "Videos"
+    movie(s.hdd, "Fifth Element 1997", R"BDMV\STREAM\00001.m2ts", store=old)
+    s.tracks["Parasite.mkv"] = [video(), audio("ko", "DTS", 6, commercial="DTS-HD Master Audio"), sub("en")]
     write_db(config.EMDB_DATABASE, [
-        ("Parasite", R"[FloBig]D:\Videos\Parasite.2019\Parasite.mkv"),
+        ("Parasite", R"[FloBig]D:\Videos\Parasite.2019.KORAEN.1080p\Parasite.mkv", "기생충", "2019"),
         ("1917", R"D:\Videos\1917.2019.mkv"),
-        ("The Fifth Element", R"S:\media\sensorflo\7e0fb0f5-7af1-4290-8fe5-e6a35b6c12b8\Videos\Fifth Element\BDMV"
-                              R"\00001.m2ts"),
-        ("Eraserhead", str(folder / "Eraserhead.mkv")),
+        ("The Fifth Element", R"S:\media\sensorflo\7e0fb0f5-7af1-4290-8fe5-e6a35b6c12b8\Videos\Fifth Element 1997"
+                              R"\BDMV\STREAM\00001.m2ts", "", "1997"),
+        ("Eraserhead", R"C:\Users\senso\Large\Videos" + "\\" + s.release.name + R"\Eraserhead.mkv", "", "1977"),
         ("Gone", R"D:\Videos\Gone.mkv"),
         ("Not a movie", R"C:\Users\senso\Documents\x.mkv"),
     ])
@@ -191,84 +301,104 @@ def test_migration(setup, capsys):
     assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 0
     assert "No problems left" in capsys.readouterr().out
 
-    assert not old.exists()
-    assert annex.is_link(videos / "Parasite.2019") and annex.is_link(videos / "1917.2019")
-    assert (videos / "1917.2019" / "1917.2019.en.srt").is_file()  # with its movie
+    assert not old.exists() and (s.hdd / config.MOVIE_STORE / "1917.2019" / "1917.2019.en.srt").is_file()
+    eraserhead = "Eraserhead (1977) {Remastered} [1080p AVC 9Mbps, en FLAC 2.0, sub en]"
+    names = {"Parasite": "Parasite - 기생충 (2019) [1080p AVC 29Mbps, ko DTS-HD MA 5.1, sub en]",
+             "1917": "1917 (2019) [1080p AVC 9Mbps, en FLAC 2.0, sub en]",
+             "The Fifth Element": "The Fifth Element (1997) [1080p AVC 9Mbps, en FLAC 2.0, sub en]"}
+    assert sorted(p.name for p in s.view.iterdir()) == sorted([eraserhead, *names.values()])
+    assert all(annex.is_link(p) for p in s.view.iterdir())
     assert locations() == {
-        "Parasite": str(videos / "Parasite.2019" / "Parasite.mkv"),
-        "1917": str(videos / "1917.2019" / "1917.2019.mkv"),
-        "The Fifth Element": str(videos / "Fifth Element" / "BDMV" / "00001.m2ts"),
-        "Eraserhead": str(folder / "Eraserhead.mkv"),
+        "Parasite": str(s.view / names["Parasite"] / "Parasite.mkv"),
+        "1917": str(s.view / names["1917"] / "1917.2019.mkv"),
+        "The Fifth Element": str(s.view / names["The Fifth Element"] / "BDMV" / "STREAM" / "00001.m2ts"),
+        "Eraserhead": str(s.view / eraserhead / "Eraserhead.mkv"),
         "Gone": "",  # cleared, the entry stays
-        "Not a movie": R"C:\Users\senso\Documents\x.mkv",  # not in Large\Videos: none of its business
+        "Not a movie": R"C:\Users\senso\Documents\x.mkv",  # not a movie's: none of albumflow's business
     }
-    entries, sync, _ = cli.movie_problems(hdd)
-    assert not sync.changes and not [e for e in entries if e.problem]
+    assert (s.view / names["Parasite"] / "Parasite.mkv").is_file()  # through the link, on the HDD
 
 
-def movie(home, name, file="m.mkv", size=10):
-    path = home / "Large" / "Videos" / name / file
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"m" * size)
-    return path
-
-
-def set_years(years):
-    """write_db gives every movie 2019; these get another year."""
-    lines = emdb.read_lines(config.EMDB_DATABASE)
-    for m in emdb.movies(lines):
-        fields = lines[m.line].split(SEP)
-        fields[0] = emdb.YEAR_PREFIX + years.get(m.title, "2019")
-        lines[m.line] = SEP.join(fields)
-    emdb.write_lines(config.EMDB_DATABASE, lines)
-
-
-def test_filesystem_is_the_master(setup, capsys):
+def test_filesystem_is_the_master(setup):
     """Movies added (found by title and year, or chosen), renamed (found by file name) and removed."""
-    home, hdd, folder = setup
-    videos = home / "Large" / "Videos"
-    parasite = movie(home, "Parasite.2019.KORAEN.1080p.BluRay.REMUX-FGT", "Parasite.mkv")
-    motors = movie(home, "Корпорация «Святые моторы» (Holy Motors) 2012, BDRemux", R"BDMV\STREAM\00001.m2ts", 50)
+    s = setup
+    parasite = movie(s.home, "Parasite.2019.KORAEN.1080p.BluRay.REMUX-FGT", "Parasite.mkv")
+    motors = movie(s.home, "Корпорация «Святые моторы» (Holy Motors) 2012, BDRemux", R"BDMV\STREAM\00001.m2ts", 50)
     (motors.parent / "00002.m2ts").write_bytes(b"x")  # smaller: not the movie
-    renamed = movie(home, "Stalin (renamed)", "Death.of.Stalin.mkv")
-    eraserhead = folder / "Eraserhead.mkv"
+    renamed = movie(s.home, "Stalin (renamed)", "Death.of.Stalin.mkv")
+    link_all(s.hdd)
     write_db(config.EMDB_DATABASE, [
         ("Parasite", ""), ("Parasite", ""),  # two entries could be it: no guess
-        ("Holy Motors", ""),
-        ("The Death of Stalin", str(videos / "The.Death.of.Stalin.2017" / "Death.of.Stalin.mkv")),
-        ("Removed", str(videos / "Removed" / "r.mkv")),
-        ("Eraserhead", str(eraserhead)),
+        ("Holy Motors", "", "", "2012"),
+        ("The Death of Stalin", str(s.view / "The Death of Stalin (2017) [x]" / "Death.of.Stalin.mkv")),
+        ("Removed", str(s.view / "Removed (2019)" / "r.mkv")),
+        ("Eraserhead", str(s.release / "Eraserhead.mkv"), "", "1977"),  # directly into the store
     ])
-    set_years({"Holy Motors": "2012"})
     backup_db()
 
-    kinds = {(e.kind, e.name) for e in cli.movie_problems(hdd)[1].entries}
-    assert kinds == {("Location to set", motors.parents[2].name), ("Location outdated", "The Death of Stalin"),
-                     ("Location to clear", "Removed"), ("not in EMDB", parasite.parent.name)}
+    sync = cli.movie_problems(s.hdd, mediainfo.Reader())[2]
+    found = {(e.kind, e.name) for e in sync.entries}
+    assert {("Location to set", "Holy Motors"), ("Location outdated", "The Death of Stalin"),
+            ("Location to clear", "Removed"), ("not in EMDB", parasite.parent.name),
+            ("Location outdated", "Eraserhead")} <= found
 
     answers = iter(["1", "y"])  # the first Parasite, then yes
     assert cli.cmd_movie_status(args(fix=True), ask=lambda _: next(answers)) == 0
-    found = [(m.title, m.location) for m in emdb.movies(emdb.read_lines(config.EMDB_DATABASE))]
-    assert found == [("Parasite", str(parasite)), ("Parasite", ""), ("Holy Motors", str(motors)),
-                     ("The Death of Stalin", str(renamed)), ("Removed", ""), ("Eraserhead", str(eraserhead))]
+    tech = "[1080p AVC 9Mbps, en FLAC 2.0, sub en]"
+    assert [(m.title, m.location) for m in emdb.movies(emdb.read_lines(config.EMDB_DATABASE))] == [
+        ("Parasite", str(s.view / f"Parasite (2019) {tech}" / "Parasite.mkv")), ("Parasite", ""),
+        ("Holy Motors", str(s.view / f"Holy Motors (2012) {tech}" / "BDMV" / "STREAM" / "00001.m2ts")),
+        ("The Death of Stalin", str(s.view / f"The Death of Stalin (2019) {tech}" / "Death.of.Stalin.mkv")),
+        ("Removed", ""),
+        ("Eraserhead", str(s.view / f"Eraserhead (1977) {{Remastered}} {tech}" / "Eraserhead.mkv"))]
+    assert all(annex.is_link(p) for p in s.view.iterdir()) and len(list(s.view.iterdir())) == 4
+    assert renamed.is_file()  # the store is never renamed
 
 
-def test_movie_on_the_disconnected_hdd_keeps_its_location(setup, monkeypatch):
-    home, hdd, folder = setup
-    movies.to_hdd(folder.name, log=quiet)
-    write_db(config.EMDB_DATABASE, [("Eraserhead", str(folder / "Eraserhead.mkv")),
-                                    ("Old", R"D:\Videos\Old\o.mkv")])  # maybe on the HDD
-    monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(hdd / "gone"))
-    entries, sync, _ = cli.movie_problems(None)
-    assert not sync.changes and not [e for e in entries if e.problem]
+def test_names_kept_while_the_hdd_is_disconnected(setup, monkeypatch):
+    """MediaInfo's findings are kept, so names are made without the movie annex; Locations to it stay."""
+    s = setup
+    link_all(s.hdd)
+    write_db(config.EMDB_DATABASE, [("Eraserhead", "", "", "1977"), ("Old", R"D:\Videos\Old\o.mkv")])
+    backup_db()
+    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 0
+    movies.to_hdd(s.release.name, log=quiet)
+    monkeypatch.setenv("ALBUMFLOW_MOVIE_ANNEX", str(s.hdd / "gone"))
+    runs = len(s.runs)
+    entries, _, sync, _ = cli.movie_problems(None, mediainfo.Reader())
+    assert not sync.changes and not sync.renames and not [e for e in entries if e.problem]
+    assert len(s.runs) == runs  # from the kept findings
+
+
+def test_nothing_renamed_while_emdb_runs(setup, monkeypatch):
+    s = setup
+    link_all(s.hdd)
+    write_db(config.EMDB_DATABASE, [("Eraserhead", "", "", "1977")])
+    backup_db()
+    before = config.EMDB_DATABASE.read_bytes()
+    monkeypatch.setattr(annex, "running_editors", lambda: ["emdb.exe"])
+    with pytest.raises(AlbumflowError, match="running"):
+        cli.cmd_movie_status(args(fix=True), ask=lambda _: "y")
+    assert config.EMDB_DATABASE.read_bytes() == before
+    assert [p.name for p in s.view.iterdir()] == [s.release.name]
 
 
 def test_not_in_emdb_without_a_choice(setup, capsys):
-    home, hdd, folder = setup
     write_db(config.EMDB_DATABASE, [])
     backup_db()
     assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 1
     assert "add the movie in EMDB, then run --fix again" in capsys.readouterr().out
+
+
+def test_long_path_is_a_hint(setup, monkeypatch, capsys):
+    s = setup
+    monkeypatch.setattr(config, "EMDB_MAX_PATH", 50)
+    link_all(s.hdd)
+    write_db(config.EMDB_DATABASE, [("Eraserhead", "", "", "1977")])
+    backup_db()
+    assert cli.cmd_movie_status(args(fix=True), ask=lambda _: "y") == 0  # a hint, not a problem
+    assert cli.cmd_movie_status(args()) == 0
+    assert "long path (1)" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("name, title, year", [
@@ -279,32 +409,10 @@ def test_not_in_emdb_without_a_choice(setup, capsys):
     ("Eraserhead (1977) REMASTERED 1080p", "Eraserhead", "1977"),
 ])
 def test_match_title(name, title, year):
-    assert movies.match_title(name, [emdb.Movie("Other", year, "", 2), emdb.Movie(title, year, "", 1)]).title == title
+    found = movies.match_title(name, [emdb.Movie("Other", "", year, "", 2), emdb.Movie(title, "", year, "", 1)])
+    assert found.title == title
 
 
 def test_match_title_not():
-    assert movies.match_title("Upgrade.2018", [emdb.Movie("Up", "2018", "", 1)]) is None  # whole words only
-    assert movies.match_title("Dune.2021", [emdb.Movie("Dune", "1984", "", 1)]) is None
-
-
-def test_emdb_untouched_while_running(setup, monkeypatch):
-    home, hdd, folder = setup
-    (hdd / "Large" / "Videos" / "Parasite").mkdir(parents=True)
-    (hdd / "Large" / "Videos" / "Parasite" / "p.mkv").write_bytes(b"p")
-    write_db(config.EMDB_DATABASE, [("Parasite", R"D:\Videos\Parasite\p.mkv")])
-    backup_db()
-    before = config.EMDB_DATABASE.read_bytes()
-    monkeypatch.setattr(annex, "running_editors", lambda: ["emdb.exe"])
-    with pytest.raises(AlbumflowError, match="running"):
-        cli.cmd_movie_status(args(fix=True), ask=lambda _: "y")
-    assert config.EMDB_DATABASE.read_bytes() == before
-    assert annex.is_link(home / "Large" / "Videos" / "Parasite")  # the link was created before
-
-
-def test_movies_not_in_emdb(setup, capsys):
-    home, hdd, folder = setup
-    (home / "Large" / "Videos" / "Captures").mkdir()  # not a movie
-    write_db(config.EMDB_DATABASE, [])
-    assert cli.cmd_movie_status(args()) == 1
-    out = capsys.readouterr().out
-    assert "not in EMDB (1)" in out and "Eraserhead" in out and "Captures" not in out
+    assert movies.match_title("Upgrade.2018", [emdb.Movie("Up", "", "2018", "", 1)]) is None  # whole words only
+    assert movies.match_title("Dune.2021", [emdb.Movie("Dune", "", "1984", "", 1)]) is None

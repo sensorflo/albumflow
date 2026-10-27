@@ -27,6 +27,7 @@ LOCATION_FIELD = 7
 @dataclass
 class Movie:
     title: str
+    original: str  # the original title, if EMDB knows one that differs
     year: str
     location: str  # as EMDB shows it, e.g. "[FloBig]D:\Videos\x.mkv"
     line: int  # index of its YEAR_PREFIX line
@@ -53,16 +54,19 @@ def read_lines(path: Path) -> list[str]:
 
 
 def movies(lines: list[str], path: Path | str = "EMDB's database") -> list[Movie]:
-    found, title = [], None
+    found, title, original = [], None, ""
     for i, line in enumerate(lines):
         if line.startswith(TITLE_PREFIX):
-            title = line[len(TITLE_PREFIX):].split(SEPARATOR)[0]
+            title_fields = decode(line[len(TITLE_PREFIX):]).split(SEPARATOR)
+            title = title_fields[0]
+            # The second field is "#O<original title>", or empty
+            original = title_fields[1][2:] if len(title_fields) > 1 and title_fields[1].startswith("#O") else ""
         elif line.startswith(YEAR_PREFIX):
             fields = line.split(SEPARATOR)
             if len(fields) != FIELDS or title is None:
                 raise AlbumflowError(f"{path}, line {i + 1}: not the EMDB format albumflow knows "
                                      f"({len(fields)} fields instead of {FIELDS})")
-            found.append(Movie(title, fields[0][len(YEAR_PREFIX):], decode(fields[LOCATION_FIELD]), i))
+            found.append(Movie(title, original, fields[0][len(YEAR_PREFIX):], decode(fields[LOCATION_FIELD]), i))
             title = None
     return found
 

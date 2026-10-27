@@ -29,3 +29,4 @@ def no_real_emdb(tmp_path, monkeypatch):
     """No test reads or writes the real EMDB database or its backups."""
     monkeypatch.setattr(config, "EMDB_DATABASE", tmp_path / "no-emdb" / "emdb.dat")
     monkeypatch.setattr(config, "EMDB_BACKUPS", tmp_path / "no-emdb" / "Backups")
+    monkeypatch.setattr(config, "MEDIAINFO_CACHE", tmp_path / "no-emdb" / "mediainfo.json")
