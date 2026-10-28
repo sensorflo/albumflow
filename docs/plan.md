@@ -443,59 +443,6 @@ To do (once the HDD is connected):
    the Void are assumed on the HDD.
 4. `albumflow movie-status`: what's left.
 
-## MovieDB: replacing EMDB (in discussion)
-
-EMDB's model is too narrow (one entry per file, no cuts, no tags, no table
-view or filter expressions, no subtitle languages or bit rates). It is
-replaced, in three steps: (1) a catalog generated from the store, MediaInfo and
-TMDB, EMDB still in use; (2) the personal data moved from EMDB into
-`movies.yml`; (3) EMDB retired, albumflow no longer writes its Locations.
-
-Decided:
-
-- **"My personal movie database"**, `Documents\MovieDB` (for now), a git repo
-  with a private GitHub remote (so backup-vcs pushes it; restic covers the
-  working tree).
-- **`movies.yml`**: the only source of personal data, one file, edited by hand;
-  albumflow only adds entries, keeping everything else as it is (ruamel.yaml),
-  atomically. Movies under `movies:`, keyed by **TMDB id** (TV series, if ever,
-  under their own key), with `# <title> (<year>)` comments written by
-  albumflow. Holds: which movies (also seen without a file), seen, rating,
-  tags, cuts, which release is which.
-- **`movies.sqlite`**: the catalog, generated from scratch from `movies.yml`,
-  the local copy of TMDB's data, the store and MediaInfo; never edited, not in
-  git. Viewed with **Datasette** (localhost only): SQL filter expressions,
-  facets, saved queries; later a shelf page (cover grid) with the same filter
-  expressions.
-- **Model**: movie → **cut** → release. Cut is the industry's term for a
-  version of the content (theatrical, director's, extended, final, redux,
-  unrated, uncut); a movie without a known cut has the theatrical one.
-  "Edition"-like words of releases (Remastered, Criterion, IMAX, Anniversary)
-  are properties of the release, not cuts.
-- **Seen**: a list of dates, **EDTF level 1** (`2024-03-15`, `2024-03`,
-  `2010~`, `2010?`, `199X`, `2015/2018`, `../1999`); "seen, no idea when" is
-  an open start, e.g. `../2026-10` (EMDB's seen movies migrate as that). For
-  searching, `~ ? %` widen by the precision: ±2 years, ±2 months, ±7 days.
-  Only a date per viewing.
-- **Rating**: 1–5 whole stars, optional. Seen and rating on the movie mean
-  "some cut, unknown which" (or the only one); on a cut, that cut.
-- **Tags**, hierarchical with `/`: `movie-series/…` set automatically from
-  TMDB's collections (only in the catalog), `franchise/…` and all others typed
-  in `movies.yml`. No ordered or described collections.
-- **TMDB** is the only external source (no IMDb, no ratings from either). Its
-  API terms: attribution with TMDB's logo and "This program uses TMDB and the
-  TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB." (in
-  the catalog's footer, the README, albumflow's help); personal, non-commercial
-  use, not shared; no AI or machine-learning use; nothing cached longer than
-  6 months, so the local copy (`MovieDB\tmdb`, `MovieDB\posters`) is refreshed
-  before then and kept out of restic and git. The API key lives in
-  albumflow's settings under `%APPDATA%`, never in the repo. The title
-  comments in `movies.yml` stay (public facts).
-
-Open: the full `movies.yml` schema, the catalog's tables, matching releases to
-TMDB movies (search, choice by number, stored in `movies.yml`), the migration
-from EMDB (TMDB ids, seen), refreshing within 6 months, the shelf page.
-
 ## Terms: backups and drives
 
 Decided 2026-10-25. Roles are backups, devices are drives (and the cloud); each device is named after the
