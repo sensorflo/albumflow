@@ -145,8 +145,10 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = (),
 
 
 def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool = False,
-               log=print, progress: Progress | None = None, remove_drive: bool = False) -> None:
-    """Copy the album's originals missing on the primary drive; with remove_drive, remove it at the end."""
+               log=print, progress: Progress | None = None,
+               eject: Callable[[Path, str], bool] | None = None) -> None:
+    """Copy the album's originals missing on the primary drive; remove it at the end if eject(drive, "primary")
+    says so."""
     source_dir = config.album_dir(topic, album)
     if not source_dir.is_dir():
         raise AlbumflowError(f"Album folder not found: {source_dir}")
@@ -172,7 +174,7 @@ def backup_new(topic: str, album: str, drive: Path | None = None, dry_run: bool 
         copy_file(src, dest, counter.add)
     log("Backup done.")
     set_backed_up(source_dir)
-    if remove_drive:
+    if eject and eject(dest_dir, "primary"):
         remove_backup_drive(dest_dir, log)
 
 
@@ -367,12 +369,12 @@ def move_to_copied(album: WaitingAlbum) -> None:
 
 
 def update_secondary(dry_run: bool = False, log=print, progress: Progress | None = None,
-                     remove_drives: bool = False) -> None:
+                     eject: Callable[[Path, str], bool] | None = None) -> None:
     """Keep the secondary backup up to date and tidy, with the primary drive and whatever else is connected:
     with the secondary drive (in the office), copy the albums waiting on the primary drive there, move them
     on the primary drive from BACKUP_DIR to COPIED_DIR, and scan the secondary drive into the primary drive's
     index; with the cloud (at home), delete from it what is on the secondary drive, as there or as of the
-    index. With remove_drives, remove the drives at the end."""
+    index. At the end, remove each drive for which eject(drive, role) is true (role primary or secondary)."""
     drive, secondary = find_backup_drive(), find_secondary_drive()
     cloud = any(root.is_dir() for root in cloud_roots())
     if drive is None:
@@ -400,9 +402,9 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
     else:
         log("The cloud isn't here: what is on the secondary drive now goes from it at the next "
             "update-secondary at home (the backup tool's backup-all runs it).")
-    if remove_drives and not dry_run:
-        for connected in (drive, secondary):
-            if connected:
+    if eject and not dry_run:
+        for connected, role in ((drive, "primary"), (secondary, "secondary")):
+            if connected and eject(connected, role):
                 remove_backup_drive(connected, log)
 
 

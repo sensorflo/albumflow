@@ -228,19 +228,6 @@ def test_import_offers_to_go_on_without_the_backup_drive(new, monkeypatch, capsy
         cli.cmd_import(args, ask=lambda prompt, keys: "q")
 
 
-@pytest.mark.parametrize("options, eject_cards, remove_drive", [
-    ([], True, True), (["--no-eject-drive"], True, False), (["--no-eject"], False, False),
-])
-def test_import_ejects_cards_and_the_primary_drive_unless_told_not_to(drives, monkeypatch, options, eject_cards,
-                                                                    remove_drive):
-    calls = []
-    monkeypatch.setattr(cli.card_import, "import_and_backup", lambda *args, **kwargs: calls.append(kwargs))
-    args = cli.build_parser().parse_args(["import", "trip/day1", *options])
-    args.topic, args.album = "trip", "day1"
-    assert cli.cmd_import(args) == 0
-    assert (calls[0]["eject_cards"], calls[0]["remove_drive"]) == (eject_cards, remove_drive)
-
-
 def test_update_cloud_skips_albums_safe_elsewhere(drives, cloud, monkeypatch, capsys):
     primary, _ = drives
     waiting(primary, r"party\fest", {"1.ARW": b"one"})

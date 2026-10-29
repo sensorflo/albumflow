@@ -76,7 +76,7 @@ def check_album_dir(topic: str, album: str, create_album: bool) -> Path:
 
 
 def import_only(topic: str, album: str, card: Path | None = None, create_album: bool = False,
-                eject_cards: bool = False, dry_run: bool = False, log=print,
+                eject: Callable[[Path, str], bool] | None = None, dry_run: bool = False, log=print,
                 card_progress: Callable[[Path], Progress | None] | None = None,
                 on_card: Callable[[int], None] | None = None,
                 on_photo: Callable[[int], None] | None = None,
@@ -87,8 +87,8 @@ def import_only(topic: str, album: str, card: Path | None = None, create_album: 
     once the current one is done, so it can be inserted while the current one
     is still being imported; when none is there, the import ends. A card with
     an empty DCIM folder is simply done. Finished cards are recognized by their
-    volume serial number and not picked again. With eject_cards, each card is
-    ejected once it is done.
+    volume serial number and not picked again. Each card is ejected once it is
+    done if eject(card, "card") says so (e.g. NoEject.ejects).
 
     card_progress(card) returns the progress callback for that card, so each
     card can get its own progress bar. on_card(bytes) is called with the size
@@ -130,7 +130,7 @@ def import_only(topic: str, album: str, card: Path | None = None, create_album: 
         log(f"Card {current} done.")
         if on_card_done:
             on_card_done(current)  # e.g. offer to prune old backups, while the card is still there
-        if eject_cards:
+        if eject and eject(current, "card"):
             eject_card(current, log)
         if card is None:
             log("Looking for the next card...")
@@ -256,16 +256,18 @@ def warn_remaining(card: Path, imported: set[Path], dry_run: bool, log=print) ->
 
 
 def import_and_backup(topic: str, album: str, card: Path | None = None, drive: Path | None = None,
-                      create_album: bool = False, eject_cards: bool = False, dry_run: bool = False,
+                      create_album: bool = False, eject: Callable[[Path, str], bool] | None = None,
+                      dry_run: bool = False,
                       log=print, card_progress: Callable[[Path], Progress | None] | None = None,
-                      backup_progress: Progress | None = None, remove_drive: bool = False,
+                      backup_progress: Progress | None = None,
                       on_backup_drive: Callable[[Path], None] | None = None,
                       on_card_done: Callable[[Path], None] | None = None) -> list[ImportItem]:
     """import_only, with backup_new running in parallel.
 
     The primary drive may be connected later; the backup starts when it appears,
     and at the end this waits for it if needed. If the backup fails midway, the
-    import still goes on; the backup error is raised at the end.
+    import still goes on; the backup error is raised at the end. eject(drive, role)
+    says whether to eject each card and, at the end, the primary drive.
     """
     if dry_run:
         items = import_only(topic, album, card=card, create_album=create_album, dry_run=True, log=log)
@@ -278,7 +280,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
                                      on_drive=on_backup_drive)
     parallel.start()
     try:
-        items = import_only(topic, album, card=card, create_album=create_album, eject_cards=eject_cards,
+        items = import_only(topic, album, card=card, create_album=create_album, eject=eject,
                             log=log, card_progress=card_progress, on_card=parallel.expect,
                             on_photo=parallel.arrived, on_card_done=on_card_done)
     except BaseException:
@@ -297,7 +299,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
     if clock.has_measurements(album_dir):  # the originals are on the backup now
         dirs = backup.album_backup_dirs(parallel.drive, topic, album) if parallel.drive else []
         clock.apply(album_dir, dirs, log=log)
-    if remove_drive and parallel.drive:
+    if eject and parallel.drive and eject(parallel.drive, "primary"):
         backup.remove_backup_drive(parallel.drive, log)
     return items
 

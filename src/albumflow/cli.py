@@ -18,7 +18,8 @@ from typing import Callable
 from albumflow import (album_choice, annex, backup, card_import, clock, completion, config, emdb, lightroom,
                        mediainfo, movies, purge, index, selfcopy)
 from albumflow.exiftool import ExifTool
-from albumflow.files import AlbumflowError, volume_label
+from albumflow.files import (EJECT_ROLE_NAMES, AlbumflowError, NoEject, drives, is_drive_letter, is_role_name,
+                             volume_label)
 
 
 def _api(interactive: bool = False):
@@ -353,10 +354,9 @@ def cmd_import(args, ask=None) -> int:
     display = ProgressDisplay()
     bar = _BackupBar(display)
     card_import.import_and_backup(args.topic, args.album, card=_path(args.card), drive=_path(args.drive),
-                                  create_album=args.create_album, eject_cards=not args.no_eject,
+                                  create_album=args.create_album, eject=no_eject(args, display.log).ejects,
                                   dry_run=args.dry_run, log=display.log, card_progress=_card_bar(display),
                                   backup_progress=bar.progress, on_backup_drive=bar.set_drive,
-                                  remove_drive=not (args.no_eject or args.no_eject_drive),
                                   on_card_done=_pruning(args, display))
     return 0
 
@@ -364,7 +364,7 @@ def cmd_import(args, ask=None) -> int:
 def cmd_import_only(args) -> int:
     display = ProgressDisplay()
     card_import.import_only(args.topic, args.album, card=_path(args.card), create_album=args.create_album,
-                            eject_cards=not args.no_eject, dry_run=args.dry_run, log=display.log,
+                            eject=no_eject(args, display.log).ejects, dry_run=args.dry_run, log=display.log,
                             card_progress=_card_bar(display), on_card_done=_pruning(args, display))
     return 0
 
@@ -970,11 +970,12 @@ def cmd_backup_new(args) -> int:
     if not args.dry_run:
         drive = backup.wait_for_backup_drive(drive, display.log)
     progress = _BackupBar(display, drive).progress
+    keep = no_eject(args, display.log)
     if not args.all:
         if drive and not args.dry_run:
             index.record_laptop(drive)  # before the drive may be removed
         backup.backup_new(args.topic, args.album, drive=drive, dry_run=args.dry_run, log=display.log,
-                          progress=progress, remove_drive=not args.no_eject)
+                          progress=progress, eject=keep.ejects)
         remind_pending(display.log)
         return 0
     drive = drive or backup.find_backup_drive()
@@ -996,7 +997,7 @@ def cmd_backup_new(args) -> int:
                           progress=progress)
     if not args.dry_run:
         index.record_laptop(drive)  # for purging on another computer: finished albums, pending corrections
-    if not args.no_eject and not args.dry_run:
+    if not args.dry_run and keep.ejects(drive, "primary"):
         backup.remove_backup_drive(drive, display.log)
     remind_pending(display.log)
     return 0
@@ -1006,7 +1007,7 @@ def cmd_update_secondary(args) -> int:
     selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
     backup.update_secondary(dry_run=args.dry_run, log=display.log, progress=display.bar("to the secondary", last=True),
-                            remove_drives=not args.no_eject)
+                            eject=no_eject(args, display.log).ejects)
     remind_pending(display.log)
     return 0
 
@@ -1138,6 +1139,52 @@ class _HelpFormatter(argparse.HelpFormatter):
                              break_on_hyphens=False)
 
 
+EJECT_ROLES = {"card": "cards", "primary": "the primary drive", "secondary": "the secondary drive"}
+
+
+def no_eject_arg(p: argparse.ArgumentParser, roles: list[str]) -> None:
+    """--no-eject for a command that ejects drives in these roles (card, primary, secondary) when done."""
+    what = " and ".join(EJECT_ROLES[role] for role in roles)
+    names = ", ".join(f"{EJECT_ROLE_NAMES[role][0]} ({EJECT_ROLES[role]})" for role in roles)
+    p.add_argument("--no-eject", nargs="?", const="", metavar="DRIVE,...",
+                   help=f"don't eject {what} when done; --no-eject=<drive>,... keeps just those: a drive letter (e or "
+                        f"e:), {names}, or a drive's name")
+    p.set_defaults(eject_roles=roles)
+
+
+def bare_no_eject(argv: list[str], parser: argparse.ArgumentParser) -> list[str]:
+    """argv with a bare --no-eject (keep all drives) as --no-eject=, so it can't take the album as its drives:
+    those must be attached with =."""
+    found = []
+    for i, arg in enumerate(argv):
+        if len(arg) >= len("--no-e") and "--no-eject".startswith(arg):  # also abbreviated
+            following = argv[i + 1] if i + 1 < len(argv) else ""
+            if is_drive_letter(following) or is_role_name(following) or "," in following:
+                parser.error(f"give the drives to keep with =, e.g. --no-eject={following}")
+            arg = "--no-eject="
+        found.append(arg)
+    return found
+
+
+def no_eject(args, log=print) -> NoEject:
+    """args.no_eject: not given, eject all; given without drives, keep all; else keep those named. A role's name
+    the command doesn't eject anyway is an error, a name no connected drive has only a warning (a card may come
+    later)."""
+    if args.no_eject is None:
+        return NoEject()
+    if not args.no_eject:
+        return NoEject(keep_all=True)
+    names = [name.strip() for name in args.no_eject.split(",") if name.strip()]
+    labels = {volume_label(drive).casefold() for drive in drives()}
+    for name in names:
+        if is_role_name(name):
+            if not any(name.casefold() in EJECT_ROLE_NAMES[role] for role in args.eject_roles):
+                raise AlbumflowError(f"--no-eject={name}: this command doesn't eject that")
+        elif not is_drive_letter(name) and name.casefold() not in labels:
+            log(f"Warning: --no-eject={name}: no drive with that name is connected (yet)")
+    return NoEject(names)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="albumflow", formatter_class=_HelpFormatter,
                                      epilog="albumflow <command> -h shows the options of a command. An overview of "
@@ -1162,12 +1209,9 @@ def build_parser() -> argparse.ArgumentParser:
                                 "yet in a secondary backup")
         if drive:
             p.add_argument("--drive", help=f"primary drive (default: the one with a {config.BACKUP_MARKER} file)")
-        what = " and ".join(w for w, used in (("cards", card), ("the primary drive", drive)) if used)
-        if what:
-            p.add_argument("--no-eject", action="store_true", help=f"don't eject {what} when done")
-        if card and drive:
-            p.add_argument("--no-eject-drive", action="store_true",
-                           help="don't eject the primary drive when done (cards still are)")
+        roles = [role for role, used in (("card", card), ("primary", drive)) if used]
+        if roles:
+            no_eject_arg(p, roles)
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
 
     p = add_command("import", aliases=["i"], help="import-only, then backup-new")
@@ -1198,7 +1242,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "update-secondary (office) and its backup-all (home). Whether backup-all also "
                                 "updates the cloud (update-cloud) is the backup tool's setting "
                                 "backup_all_includes_update_cloud, in %APPDATA%\\backup\\config.json.")
-    p.add_argument("--no-eject", action="store_true", help="don't remove the drives when done")
+    no_eject_arg(p, ["primary", "secondary"])
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_secondary)
 
@@ -1341,10 +1385,11 @@ def main(argv: list[str] | None = None) -> int:
         stream.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
-    if not (sys.argv[1:] if argv is None else argv):  # no command: the same as -h
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:  # no command: the same as -h
         parser.print_help()
         return 0
-    args = parser.parse_args(argv)
+    args = parser.parse_args(bare_no_eject(argv, parser))
     try:
         if getattr(args, "all", False) and args.album_query:
             raise AlbumflowError("Give either an album or --all, not both")

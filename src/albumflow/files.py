@@ -5,10 +5,12 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import re
 import shutil
 import string
 import time
 from ctypes import wintypes
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -109,6 +111,38 @@ def eject(drive: Path, attempts: int = 5) -> None:
             raise fail("eject")
     finally:
         k32.CloseHandle(handle)
+
+
+# --no-eject=<drive>,...: the names for drives by their role, besides drive letters and volume labels
+EJECT_ROLE_NAMES = {"card": ["sdcards"], "primary": ["drive", "backup-drive", "primary"], "secondary": ["secondary"]}
+
+
+@dataclass
+class NoEject:
+    """The drives a command keeps connected when done instead of ejecting them (--no-eject): all (keep_all), or
+    those named: a drive letter (e or e:), a role's name (EJECT_ROLE_NAMES) or a volume label."""
+    names: list[str] = field(default_factory=list)
+    keep_all: bool = False
+
+    def ejects(self, drive: Path, role: str) -> bool:
+        """Whether to eject drive (any path on it) in its role (card, primary or secondary)."""
+        return not (self.keep_all or any(names_drive(name, drive, role) for name in self.names))
+
+
+def is_role_name(name: str) -> bool:
+    return any(name.casefold() in names for names in EJECT_ROLE_NAMES.values())
+
+
+def is_drive_letter(name: str) -> bool:
+    return re.fullmatch(r"[a-z]:?", name, re.IGNORECASE) is not None
+
+
+def names_drive(name: str, drive: Path, role: str) -> bool:
+    if is_drive_letter(name):
+        return drive.drive[:1].casefold() == name[0].casefold()
+    if is_role_name(name):
+        return name.casefold() in EJECT_ROLE_NAMES[role]
+    return volume_label(drive).casefold() == name.casefold()
 
 
 class _GUID(ctypes.Structure):

@@ -230,7 +230,7 @@ def test_empty_dcim_is_a_card_with_nothing_to_do(setup, monkeypatch):
     monkeypatch.setattr(card_import, "card_candidates", lambda: [empty, card])
     ejected = []
     monkeypatch.setattr(card_import, "eject", ejected.append)
-    items = card_import.import_only("party", "fest", create_album=True, eject_cards=True, log=lambda *_: None)
+    items = card_import.import_only("party", "fest", create_album=True, eject=lambda *_: True, log=lambda *_: None)
     assert len(items) == 2
     assert ejected == [empty, card]
 
@@ -249,7 +249,7 @@ def test_ejects_each_finished_card(setup, monkeypatch):
     monkeypatch.setattr(card_import, "card_candidates", lambda: [card1, card2])
     ejected = []
     monkeypatch.setattr(card_import, "eject", ejected.append)
-    card_import.import_only("party", "fest", create_album=True, eject_cards=True, log=lambda *_: None)
+    card_import.import_only("party", "fest", create_album=True, eject=lambda *_: True, log=lambda *_: None)
     assert ejected == [card1, card2]
 
 
@@ -261,7 +261,7 @@ def test_failed_eject_is_only_a_warning(setup, monkeypatch):
 
     monkeypatch.setattr(card_import, "eject", fail)
     lines = []
-    card_import.import_only("party", "fest", card=card, create_album=True, eject_cards=True, log=lines.append)
+    card_import.import_only("party", "fest", card=card, create_album=True, eject=lambda *_: True, log=lines.append)
     assert any(line.startswith("Warning: Could not eject") for line in lines)
 
 
@@ -339,7 +339,7 @@ def test_backup_new_removes_drive_only_when_asked(setup, monkeypatch):
     monkeypatch.setattr(backup, "remove_device", removed.append)
     backup.backup_new("party", "fest", drive=drive, log=lambda *_: None)
     assert removed == []
-    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None, remove_drive=True)
+    backup.backup_new("party", "fest", drive=drive, log=lambda *_: None, eject=lambda *_: True)
     assert removed == [Path(drive.anchor)]
 
 
@@ -350,7 +350,7 @@ def test_import_removes_backup_drive_after_backup(setup, monkeypatch):
     removed = []
     monkeypatch.setattr(backup, "remove_device", removed.append)
     card_import.import_and_backup("party", "fest", card=card, drive=drive, create_album=True,
-                                  log=lambda *_: None, remove_drive=True)
+                                  log=lambda *_: None, eject=lambda *_: True)
     assert len(list((drive / config.BACKUP_DIR / "party" / "fest").iterdir())) == 2
     assert removed == [Path(drive.anchor)]
 
@@ -359,6 +359,6 @@ def test_card_done_hook_runs_before_eject(setup, monkeypatch):
     card, tmp = setup
     events = []
     monkeypatch.setattr(card_import, "eject", lambda c: events.append("eject"))
-    card_import.import_only("party", "fest", card=card, create_album=True, eject_cards=True, log=lambda *_: None,
+    card_import.import_only("party", "fest", card=card, create_album=True, eject=lambda *_: True, log=lambda *_: None,
                             on_card_done=lambda c: events.append("done"))
     assert events == ["done", "eject"]

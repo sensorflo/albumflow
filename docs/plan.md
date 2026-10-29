@@ -198,6 +198,10 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
   file in its root. Only adds files, never deletes or overwrites, so photos
   culled later stay backed up. At the end, the backup drive is safely removed
   (like "Safely Remove Hardware"; `--no-eject` keeps it), also after `import`.
+  `--no-eject=<drive>,...` (2026-10-29) keeps just the drives named, ejecting
+  the others: a drive letter (`e`, `e:`), `sdcards`, `drive` (also
+  `backup-drive`, `primary`), `secondary`, or a volume label. Attached with
+  `=`, so the list can't take the album as a drive name.
 - **`albumflow import <topic>/<album>`** (`i`) – `import-only` with `backup-new`
   running in parallel: a background thread repeatedly backs up whatever is on
   the PC but not yet on the SSD, until the last card is done. The SSD may be
