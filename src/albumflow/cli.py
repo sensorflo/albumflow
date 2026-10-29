@@ -356,7 +356,8 @@ def cmd_import(args, ask=None) -> int:
                                   create_album=args.create_album, eject_cards=not args.no_eject,
                                   dry_run=args.dry_run, log=display.log, card_progress=_card_bar(display),
                                   backup_progress=bar.progress, on_backup_drive=bar.set_drive,
-                                  remove_drive=not args.no_eject, on_card_done=_pruning(args, display))
+                                  remove_drive=not (args.no_eject or args.no_eject_drive),
+                                  on_card_done=_pruning(args, display))
     return 0
 
 
@@ -1164,6 +1165,9 @@ def build_parser() -> argparse.ArgumentParser:
         what = " and ".join(w for w, used in (("cards", card), ("the primary drive", drive)) if used)
         if what:
             p.add_argument("--no-eject", action="store_true", help=f"don't eject {what} when done")
+        if card and drive:
+            p.add_argument("--no-eject-drive", action="store_true",
+                           help="don't eject the primary drive when done (cards still are)")
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
 
     p = add_command("import", aliases=["i"], help="import-only, then backup-new")
