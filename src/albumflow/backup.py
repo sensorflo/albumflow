@@ -95,8 +95,7 @@ def secondary_backup_dirs_named(album: str) -> list[Path]:
         roots.append(drive / config.COPIED_DIR)
     if secondary:
         roots.append(secondary / config.SECONDARY_DIR)
-    if config.CLOUD_PICTURES.is_dir():
-        roots.append(config.CLOUD_PICTURES)
+    roots += [root for root in cloud_roots() if root.is_dir()]
     return [folder for root in roots for folder in sorted(root.glob(f"*/{album}")) if folder.is_dir()]
 
 
@@ -375,7 +374,7 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
     index; with the cloud (at home), delete from it what is on the secondary drive, as there or as of the
     index. With remove_drives, remove the drives at the end."""
     drive, secondary = find_backup_drive(), find_secondary_drive()
-    cloud = config.CLOUD_PICTURES.is_dir()
+    cloud = any(root.is_dir() for root in cloud_roots())
     if drive is None:
         raise AlbumflowError(f"The primary drive (with a {config.BACKUP_MARKER} file) is not connected")
     if secondary is None and not cloud:  # e.g. at home, the cloud never used: nothing to do (backup-all runs this)
@@ -410,12 +409,9 @@ def update_secondary(dry_run: bool = False, log=print, progress: Progress | None
 def cloud_files_on_secondary(drive: Path) -> list[Path]:
     """The files in the cloud whose photo is also on the secondary drive (there, or as of the primary drive's
     index): with the same name and size, or, for a clock-corrected copy (<master time>-<import name>), its
-    original by import name."""
-    cloud = config.CLOUD_PICTURES
+    original by import name. In both of the cloud's trees."""
     found = []
-    for folder in sorted(cloud.glob("*/*")) if cloud.is_dir() else []:
-        if not folder.is_dir():
-            continue
+    for folder in cloud_albums():
         known = on_secondary_drive(drive, folder.parent.name, folder.name)
         for path in sorted(folder.rglob("*")):
             if not path.is_file() or path.suffix == ".part":
@@ -432,7 +428,6 @@ def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> lis
     Permanently via the Google Drive API where possible, so the space is free right away; otherwise (not
     logged in, or a file Drive doesn't have yet) locally, which moves them to Drive's trash.
     """
-    cloud = config.CLOUD_PICTURES
     by_album: dict[Path, list[Path]] = {}
     for path in files:
         by_album.setdefault(path.parent, []).append(path)
@@ -444,27 +439,27 @@ def delete_from_cloud(files: list[Path], reason: str, dry_run: bool, log) -> lis
     for folder, paths in by_album.items():
         size = sum(p.stat().st_size for p in paths)
         verb = "Would delete" if dry_run else "Deleting"
-        log(f"{verb} from the cloud, {reason}: {folder.relative_to(cloud)}, {len(paths)} files, {size / 1e9:.1f} GB")
+        log(f"{verb} from the cloud, {reason}: {in_cloud(folder)}, {len(paths)} files, {size / 1e9:.1f} GB")
         if dry_run:
             continue
         permanent = set(gdrive.delete_permanently(client, config.CLOUD_MY_DRIVE, paths)) if client else set()
         to_trash += len(paths) - len(permanent)
         for path in paths:
             path.unlink(missing_ok=True)
-        for empty in (folder, folder.parent):
-            if empty != cloud and empty.is_dir() and not any(empty.iterdir()):
-                empty.rmdir()
+        _remove_empty(folder)
     if to_trash and client:
         log(f"{to_trash} of them went to Drive's trash: Drive didn't have them (yet).")
     return [] if dry_run else files
 
 def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = None) -> None:
-    """Copy what hasn't reached the secondary drive to CLOUD_PICTURES, which doubles for the
-    secondary while that is out of reach: the albums waiting on the primary drive, and the photos of albums
-    pending a backup, from the PC. The primary drive stays as it is.
+    """Copy what hasn't reached the secondary drive to the cloud, which doubles for the secondary while that
+    is out of reach: the albums waiting on the primary drive, and the photos of albums pending a backup, from
+    the PC. The primary drive stays as it is.
 
-    Kept photos (still in the new tree) come first. When space is short (CLOUD_RESERVE is always left free),
-    rejected photos (no longer in the new tree) are deleted from the cloud, and copied only if there is room.
+    The cloud mirrors culling: kept photos in CLOUD_PICTURES, rejected ones (rejected_photos) in cloud_rejected();
+    a photo culled since is moved there, one taken back moved back. Kept photos are always copied, leaving
+    CLOUD_RESERVE free; when space is short, rejected photos are deleted from the cloud first (in name order,
+    only as many as needed). Rejected photos are copied into the room left.
     """
     drive = find_backup_drive()
     cloud = config.CLOUD_PICTURES
@@ -477,26 +472,35 @@ def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = N
         if where := safe_elsewhere(album):
             log(f"  {album.name}: skipped, safe elsewhere ({where})")
             continue
-        names = kept_names(album.dest.relative_to(cloud))
+        names = rejected_photos(album.dest.relative_to(cloud))
         for src, dest in album.todo:
-            (kept if names is None or split_name(src.name)[1] in names else rejected).append((src, dest))
+            if split_name(src.name)[1] in names:
+                rejected.append((src, cloud_rejected() / dest.relative_to(cloud)))
+            else:
+                kept.append((src, dest))
         if album.todo:
             log(f"  {album.name}: {len(album.todo)} files, {album.size / 1e9:.1f} GB to copy")
     kept_size, rejected_size = (sum(src.stat().st_size for src, _ in files) for files in (kept, rejected))
     free = free_space(Path(cloud.anchor)) - config.CLOUD_RESERVE
-    log(f"{(kept_size + rejected_size) / 1e9:.1f} GB to copy to {cloud} ({rejected_size / 1e9:.1f} GB of it "
+    log(f"{(kept_size + rejected_size) / 1e9:.1f} GB to copy to the cloud ({rejected_size / 1e9:.1f} GB of it "
         f"rejected photos), {free / 1e9:.1f} GB free there (keeping {config.CLOUD_RESERVE / 1e9:.0f} GB free).")
-    if not kept and not rejected:
-        return
-    room = free - kept_size  # for rejected photos: not what deleting rejected ones frees, which would only churn
-    if kept_size + rejected_size > free:
-        deletable = rejected_in_cloud()
-        deletable_size = sum(p.stat().st_size for p in deletable)
-        if kept_size > free + deletable_size:
-            raise AlbumflowError(f"Not enough space in {cloud}: the kept photos need {kept_size / 1e9:.1f} GB, "
-                                 f"{(free + deletable_size) / 1e9:.1f} GB could be made free by deleting the "
+    placed = cloud_photos()
+    sizes = {path: path.stat().st_size for path, target in placed if target.is_relative_to(cloud_rejected())}
+    pruned = []
+    if kept_size > free:
+        if kept_size > free + sum(sizes.values()):
+            raise AlbumflowError(f"Not enough space in the cloud: the kept photos need {kept_size / 1e9:.1f} GB, "
+                                 f"{(free + sum(sizes.values())) / 1e9:.1f} GB could be made free by deleting the "
                                  "rejected ones there")
-        delete_from_cloud(deletable, "rejected", dry_run, log)
+        for path in sorted(sizes, key=in_cloud_album):
+            if kept_size <= free:
+                break
+            pruned.append(path)
+            free += sizes[path]
+        delete_from_cloud(pruned, "rejected, to make room", dry_run, log)
+    _move_in_cloud([(path, target) for path, target in placed if path != target and path not in pruned],
+                   dry_run, log)
+    room = free - kept_size  # for rejected photos: not what deleting more rejected ones would free
     fitting = []
     for src, dest in rejected:
         if src.stat().st_size <= room:
@@ -504,14 +508,39 @@ def update_cloud(dry_run: bool = False, log=print, progress: Progress | None = N
             room -= src.stat().st_size
     if len(fitting) < len(rejected):
         log(f"{len(rejected) - len(fitting)} rejected photos are not copied to the cloud: not enough room.")
-    if not dry_run:
+    if not dry_run and (kept or fitting):
         _copy_files(kept + fitting, progress)
         log(f"Copied {len(kept) + len(fitting)} files to the cloud.")
 
 
+def cloud_rejected() -> Path:
+    return config.CLOUD_PICTURES.parent / config.CLOUD_REJECTED
+
+
+def cloud_roots() -> list[Path]:
+    """The cloud's two trees: the kept photos, and the rejected ones."""
+    return [config.CLOUD_PICTURES, cloud_rejected()]
+
+
+def cloud_albums() -> list[Path]:
+    """The album folders (<tree>\\<topic>\\<album>) in the cloud's two trees."""
+    return [folder for root in cloud_roots() for folder in (sorted(root.glob("*/*")) if root.is_dir() else [])
+            if folder.is_dir()]
+
+
+def in_cloud(path: Path) -> Path:
+    """path relative to the folder holding the cloud's trees, e.g. pictures-rejected\\trip\\day1."""
+    return path.relative_to(config.CLOUD_PICTURES.parent)
+
+
+def in_cloud_album(path: Path) -> Path:
+    """path relative to its tree, e.g. trip\\day1\\1.ARW."""
+    return Path(*in_cloud(path).parts[1:])
+
+
 def kept_names(album: Path) -> set[str] | None:
     """The import names of the photos of album (<topic>\\<album>) still in the new tree, in new or new-old,
-    also when in the annex; None if the album isn't found there (e.g. renamed): then all count as kept."""
+    also when in the annex; None if the album isn't found there (e.g. renamed)."""
     for root in (config.PICTURES_NEW, config.PICTURES_NEW_OLD):
         for folder in (root / album, annex.link_of(root / album)):
             if folder.is_dir():
@@ -519,16 +548,54 @@ def kept_names(album: Path) -> set[str] | None:
     return None
 
 
-def rejected_in_cloud() -> list[Path]:
-    """The photos in the cloud that are no longer in the new tree (in albums found there)."""
-    cloud = config.CLOUD_PICTURES
+def rejected_photos(album: Path) -> set[str]:
+    """The import names of the rejected photos of album (<topic>\\<album>): in REJECTED_TREE (on C: or in the
+    annex) and not in the new tree. Any other photo counts as kept."""
+    here = annex.home() / config.REJECTED_TREE / album
+    names = {split_name(p.name)[1] for folder in (here, annex.link_of(here)) if folder.is_dir()
+             for p in clock.photo_files(folder)}
+    return names - (kept_names(album) or set())
+
+
+def cloud_photos() -> list[tuple[Path, Path]]:
+    """Every file in the cloud's two trees, with where it belongs: in cloud_rejected() if rejected, else in
+    CLOUD_PICTURES."""
     found = []
-    for folder in sorted(cloud.glob("*/*")) if cloud.is_dir() else []:
-        names = kept_names(folder.relative_to(cloud))
-        if names is not None:
-            found += [p for p in sorted(folder.iterdir())
-                      if p.is_file() and p.suffix != ".part" and split_name(p.name)[1] not in names]
+    for folder in cloud_albums():
+        album = in_cloud_album(folder)
+        names = rejected_photos(album)
+        for path in album_files(folder):
+            root = cloud_rejected() if split_name(path.name)[1] in names else config.CLOUD_PICTURES
+            found.append((path, root / album / path.relative_to(folder)))
     return found
+
+
+def _move_in_cloud(moves: list[tuple[Path, Path]], dry_run: bool, log) -> None:
+    """Move the files within the cloud (one line per album): Drive renames them, uploading nothing."""
+    by_album: dict[Path, list[tuple[Path, Path]]] = {}
+    for path, target in moves:
+        by_album.setdefault(target.parent, []).append((path, target))
+    for folder, files in by_album.items():
+        log(f"{'Would move' if dry_run else 'Moving'} to {in_cloud(folder)}: {len(files)} files")
+        if dry_run:
+            continue
+        for path, target in files:
+            if target.exists():
+                if target.stat().st_size != path.stat().st_size:
+                    raise AlbumflowError(f"{target} already exists with a different size than {path}")
+                path.unlink()  # the same file, e.g. of a move interrupted before
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                path.replace(target)
+            _remove_empty(path.parent)
+
+
+def _remove_empty(folder: Path) -> None:
+    """Remove folder and its parents within the cloud's trees, as far as they are empty."""
+    while (any(folder.is_relative_to(root) and folder != root for root in cloud_roots())
+           and folder.is_dir() and not any(folder.iterdir())):
+        folder.rmdir()
+        folder = folder.parent
 
 
 def _copy_files(files: list[tuple[Path, Path]], progress: Progress | None) -> None:
@@ -546,9 +613,11 @@ def safe_elsewhere(album: WaitingAlbum) -> str | None:
 
 def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
     """What the cloud lacks of the albums waiting on the primary drive (if connected), and of the photos of
-    albums pending a backup, read from the PC."""
+    albums pending a backup, read from the PC. A file in either of the cloud's trees counts as there."""
     cloud = config.CLOUD_PICTURES
     albums = waiting_albums(drive, cloud) if drive else []
+    for album in albums:
+        album.todo = _not_in_cloud_rejected(album.todo)
     for topic, album in pending_albums():
         on_drive = drive / config.BACKUP_DIR / topic / album if drive else None
         todo = []
@@ -561,9 +630,21 @@ def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
                 todo.append((src, target))
             elif target.stat().st_size != src.stat().st_size:
                 raise AlbumflowError(f"{target} already exists with a different size than {src}")
-        albums.append(WaitingAlbum(f"{topic}\\{album} (pending a backup, from the PC)",
-                                   config.album_dir(topic, album), None, cloud / topic / album, todo))
+        albums.append(WaitingAlbum(f"{topic}\\{album} (pending a backup, from the PC)", config.album_dir(topic, album),
+                                   None, cloud / topic / album, _not_in_cloud_rejected(todo)))
     return albums
+
+
+def _not_in_cloud_rejected(todo: list[tuple[Path, Path]]) -> list[tuple[Path, Path]]:
+    """todo (destinations in CLOUD_PICTURES) without the files already in cloud_rejected()."""
+    found = []
+    for src, dest in todo:
+        there = cloud_rejected() / dest.relative_to(config.CLOUD_PICTURES)
+        if not there.exists():
+            found.append((src, dest))
+        elif there.stat().st_size != src.stat().st_size:
+            raise AlbumflowError(f"{there} already exists with a different size than {src}")
+    return found
 
 
 def _check_space(albums: list[WaitingAlbum], dest_root: Path, free: int, log) -> bool:

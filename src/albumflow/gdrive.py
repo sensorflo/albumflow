@@ -1,7 +1,8 @@
-"""Thin client for the Google Drive API: deleting files of the cloud folder permanently.
+"""Thin client for the Google Drive API: deleting files of the cloud folders permanently.
 
-The cloud folder (config.CLOUD_PICTURES) is written through Google Drive for desktop (G:). Deleting a
-file there moves it to Drive's trash, where it still counts against the storage for 30 days. Deleting it
+The cloud folders (config.CLOUD_PICTURES, and config.CLOUD_REJECTED next to it) are written through Google Drive
+for desktop (G:). Deleting a file there moves it to Drive's trash, where it still counts against the storage for
+30 days. Deleting it
 through the API instead frees the space right away; Drive for desktop then removes the local copy.
 """
 

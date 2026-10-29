@@ -122,6 +122,7 @@ def test_cli(drives, capsys):
 def cloud(tmp_path, monkeypatch):
     folder = tmp_path / "G" / "My Drive" / "Backup" / "pictures-new"
     monkeypatch.setattr(config, "CLOUD_PICTURES", folder)
+    monkeypatch.setattr(config, "HOME_FOLDER", tmp_path / "home")  # its Rejected tree
     return folder
 
 
@@ -168,6 +169,7 @@ def pending_album(new, name, files):
 def new(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PICTURES_NEW", tmp_path / "new")
     monkeypatch.setattr(config, "PICTURES_NEW_OLD", tmp_path / "new-old")
+    monkeypatch.setattr(config, "HOME_FOLDER", tmp_path / "home")
     return tmp_path / "new"
 
 
@@ -262,11 +264,16 @@ def test_update_secondary_deletes_from_the_cloud_what_is_on_the_secondary(drives
     (cloud / "party" / "fest" / "20261101T100500-20261101T100000-_DSC1.ARW").write_bytes(b"corrected")
     (cloud / "trip" / "open").mkdir(parents=True)
     (cloud / "trip" / "open" / "3.ARW").write_bytes(b"three")  # not on the secondary
+    (cloud / "party" / "fest" / "2.ARW").replace(cloud / "1.tmp")
+    (backup.cloud_rejected() / "party" / "fest").mkdir(parents=True)
+    (cloud / "1.tmp").replace(backup.cloud_rejected() / "party" / "fest" / "2.ARW")  # rejected
     lines = []
     backup.update_secondary(log=lines.append)
-    assert not (cloud / "party").exists()
+    assert not (cloud / "party").exists() and tree(backup.cloud_rejected()) == {}
     assert tree(cloud) == {r"trip\open\3.ARW": b"three"}
-    assert r"Deleting from the cloud, on the secondary drive now: party\fest, 3 files, 0.0 GB" in lines
+    assert r"Deleting from the cloud, on the secondary drive now: pictures-new\party\fest, 2 files, 0.0 GB" in lines
+    assert r"Deleting from the cloud, on the secondary drive now: pictures-rejected\party\fest, 1 files, 0.0 GB" \
+        in lines
 
 
 def test_update_secondary_keeps_a_cloud_file_of_another_size(drives, cloud):
@@ -278,12 +285,16 @@ def test_update_secondary_keeps_a_cloud_file_of_another_size(drives, cloud):
     assert tree(cloud) == {r"party\fest\1.ARW": b"different"}
 
 
-def culled(new, name, kept):
-    """The album on the PC, holding only the kept photos (the others were rejected)."""
+def culled(new, name, kept, rejected=()):
+    """The album on the PC: the kept photos in the new tree, the rejected ones in the Rejected tree."""
     folder = new / name
     folder.mkdir(parents=True, exist_ok=True)
     for file in kept:
         (folder / file).write_bytes(b"k")
+    there = annex.home() / config.REJECTED_TREE / name
+    there.mkdir(parents=True, exist_ok=True)
+    for file in rejected:
+        (there / file).write_bytes(b"r")
     return folder
 
 
@@ -292,30 +303,54 @@ def space(monkeypatch, free):
     monkeypatch.setattr(backup, "free_space", lambda drive: free + 10)
 
 
-def test_update_cloud_with_enough_space_copies_rejected_photos_too(drives, cloud, new, monkeypatch):
+def test_update_cloud_with_enough_space_copies_rejected_photos_to_their_tree(drives, cloud, new, monkeypatch):
     primary, _ = drives
     waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222"})
-    culled(new, r"trip\day1", ["1.ARW"])
+    culled(new, r"trip\day1", ["1.ARW"], ["2.ARW"])
     space(monkeypatch, 8)
     backup.update_cloud(log=lambda *_: None)
-    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\day1\2.ARW": b"2222"}
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111"}
+    assert tree(backup.cloud_rejected()) == {r"trip\day1\2.ARW": b"2222"}
+    backup.update_cloud(log=lambda *_: pytest.fail("copied again") if "Copied" in _[0] else None)
 
 
-def test_update_cloud_short_on_space_deletes_rejected_and_copies_kept_first(drives, cloud, new, monkeypatch):
+def test_update_cloud_moves_photos_culled_since_and_back(drives, cloud, new, monkeypatch):
     primary, _ = drives
     waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222"})
-    waiting(primary, r"trip\day2", {"3.ARW": b"3333", "4.ARW": b"4444"})
-    culled(new, r"trip\day1", ["1.ARW"])
-    culled(new, r"trip\day2", ["20261102T100500-3.ARW"])  # kept, and clock-corrected on the PC
-    (cloud / "trip" / "day1").mkdir(parents=True)
-    (cloud / "trip" / "day1" / "2.ARW").write_bytes(b"2222")  # rejected since copied
+    album = culled(new, r"trip\day1", ["1.ARW", "2.ARW"])
     (cloud / "trip" / "old").mkdir(parents=True)
     (cloud / "trip" / "old" / "x.ARW").write_bytes(b"xx")  # album no longer on the PC: kept
-    space(monkeypatch, 8)  # the kept photos need 8, 4 more would be needed for 4.ARW
+    backup.update_cloud(log=lambda *_: None)
+    (album / "2.ARW").unlink()
+    culled(new, r"trip\day1", [], ["2.ARW"])
     lines = []
     backup.update_cloud(log=lines.append)
-    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\day2\3.ARW": b"3333", r"trip\old\x.ARW": b"xx"}
-    assert r"Deleting from the cloud, rejected: trip\day1, 1 files, 0.0 GB" in lines
+    assert r"Moving to pictures-rejected\trip\day1: 1 files" in lines
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\old\x.ARW": b"xx"}
+    assert tree(backup.cloud_rejected()) == {r"trip\day1\2.ARW": b"2222"}
+    (annex.home() / config.REJECTED_TREE / "trip" / "day1" / "2.ARW").unlink()  # taken back
+    culled(new, r"trip\day1", ["2.ARW"])
+    backup.update_cloud(log=lambda *_: None)
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"1111", r"trip\day1\2.ARW": b"2222", r"trip\old\x.ARW": b"xx"}
+    assert tree(backup.cloud_rejected()) == {}
+
+
+def test_update_cloud_short_on_space_deletes_only_as_many_rejected_as_needed(drives, cloud, new, monkeypatch):
+    primary, _ = drives
+    waiting(primary, r"trip\day1", {"1.ARW": b"1111", "2.ARW": b"2222", "3.ARW": b"3333"})
+    culled(new, r"trip\day1", ["1.ARW", "2.ARW", "3.ARW"])
+    backup.update_cloud(log=lambda *_: None)
+    (new / "trip" / "day1" / "1.ARW").unlink()
+    (new / "trip" / "day1" / "2.ARW").unlink()
+    culled(new, r"trip\day1", [], ["1.ARW", "2.ARW"])  # rejected since copied, not moved in the cloud yet
+    waiting(primary, r"trip\day2", {"4.ARW": b"4444", "5.ARW": b"5555"})
+    culled(new, r"trip\day2", ["20261102T100500-4.ARW"], ["5.ARW"])  # 4.ARW kept, and clock-corrected on the PC
+    space(monkeypatch, 2)  # 4.ARW needs 2 more: 1.ARW goes
+    lines = []
+    backup.update_cloud(log=lines.append)
+    assert r"Deleting from the cloud, rejected, to make room: pictures-new\trip\day1, 1 files, 0.0 GB" in lines
+    assert tree(cloud) == {r"trip\day1\3.ARW": b"3333", r"trip\day2\4.ARW": b"4444"}
+    assert tree(backup.cloud_rejected()) == {r"trip\day1\2.ARW": b"2222"}
     assert "1 rejected photos are not copied to the cloud: not enough room." in lines
 
 
@@ -325,11 +360,36 @@ def test_update_cloud_never_deletes_kept_photos(drives, cloud, new, monkeypatch)
     culled(new, r"trip\day1", ["1.ARW", "2.ARW"])
     (cloud / "trip" / "day0").mkdir(parents=True)
     (cloud / "trip" / "day0" / "0.ARW").write_bytes(b"0")
-    culled(new, r"trip\day0", ["0.ARW"])
-    space(monkeypatch, 7)
+    culled(new, r"trip\day0", [], ["0.ARW"])
+    space(monkeypatch, 6)
     with pytest.raises(AlbumflowError, match="the kept photos need"):
         backup.update_cloud(log=lambda *_: None)
     assert tree(cloud) == {r"trip\day0\0.ARW": b"0"}
+
+
+def test_update_cloud_dry_run_moves_and_deletes_nothing(drives, cloud, new, monkeypatch):
+    primary, _ = drives
+    (cloud / "trip" / "day0").mkdir(parents=True)
+    (cloud / "trip" / "day0" / "0.ARW").write_bytes(b"0000")
+    (cloud / "trip" / "day0" / "9.ARW").write_bytes(b"9999")
+    culled(new, r"trip\day0", [], ["0.ARW", "9.ARW"])
+    waiting(primary, r"trip\day1", {"1.ARW": b"1111"})
+    space(monkeypatch, 0)
+    lines = []
+    backup.update_cloud(dry_run=True, log=lines.append)
+    assert r"Would delete from the cloud, rejected, to make room: pictures-new\trip\day0, 1 files, 0.0 GB" in lines
+    assert r"Would move to pictures-rejected\trip\day0: 1 files" in lines
+    assert tree(cloud) == {r"trip\day0\0.ARW": b"0000", r"trip\day0\9.ARW": b"9999"}
+
+
+def test_rejected_photos_on_c_and_in_the_annex_not_taken_back(new, tmp_path):
+    culled(new, r"trip\day1", ["3.ARW"], ["1.ARW", "3.ARW"])  # 3.ARW: taken back to new
+    target = tmp_path / "annex" / "day1"
+    target.mkdir(parents=True)
+    (target / "2.ARW").write_bytes(b"r")
+    annex.create_link(annex.link_of(annex.home() / config.REJECTED_TREE / "trip" / "day1"), target)
+    assert backup.rejected_photos(Path(r"trip\day1")) == {"1.ARW", "2.ARW"}
+    assert backup.rejected_photos(Path(r"trip\none")) == set()
 
 
 def test_kept_names_also_in_new_old_and_the_annex(new, tmp_path):

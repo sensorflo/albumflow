@@ -499,13 +499,18 @@ So:
     `copied-to-secondary`)
   - the cloud: `G:\My Drive\Backup\pictures-new\<topic>\<album>`
     (`update-cloud`: copy `to-secondary` there, and albums pending a backup
-    from the PC). Cloud space is limited, so (2026-10-24):
-    - `update-cloud` copies kept photos (still in `new`/`new-old`) first and
-      always leaves `CLOUD_RESERVE` (2 GB) free. When space is short it
-      deletes the rejected photos (no longer in the new tree) from the
-      cloud, and copies rejected ones only into room that was free anyway.
-      Kept photos are never deleted; if even they don't fit, it stops.
-    - `update-secondary` deletes from the cloud what is on the secondary now.
+    from the PC). It mirrors culling (2026-10-29): rejected photos (in
+    `Rejected`, not in `new`/`new-old`) are in
+    `G:\My Drive\Backup\pictures-rejected\<topic>\<album>`; each run moves
+    photos culled since there (and those taken back, back), renames on
+    Drive, no upload. Any other photo counts as kept. Cloud space is limited, so:
+    - `update-cloud` always copies the kept photos, leaving `CLOUD_RESERVE`
+      (2 GB) free. When space is short it first deletes rejected photos,
+      in name order, only as many as needed (in practice the one album
+      being culled), before moving. Rejected photos are copied into the
+      room left. Kept photos are never deleted; if even they don't fit, it
+      stops before deleting anything.
+    - `update-secondary` deletes from both trees what is on the secondary now.
     - Deleting goes through the Google Drive API, permanently, so the space
       is free right away (deleting on G: would go to Drive's trash, which
       still counts for 30 days); without the login (`google-login`), or for

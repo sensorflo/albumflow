@@ -42,6 +42,9 @@ SELF_COPY = r"Backup\albumflow.pyz"
 # While the secondary drive is out of reach (e.g. on holiday), update-cloud copies the same albums to
 # <CLOUD_PICTURES>\<topic>\<album> instead; the backup tool runs it then and names the folder in its README.
 CLOUD_PICTURES = Path(os.environ.get("ALBUMFLOW_CLOUD_PICTURES", r"G:\My Drive\Backup\pictures-new"))
+# Next to CLOUD_PICTURES, the same for the rejected photos (in REJECTED_TREE): <it>\<topic>\<album>. When space is
+# short, update-cloud deletes from here.
+CLOUD_REJECTED = "pictures-rejected"
 # The local folder of Google Drive's "My Drive" (Google Drive for desktop), containing CLOUD_PICTURES: deleting
 # there goes through the Drive API, permanently, instead of to the trash
 CLOUD_MY_DRIVE = Path(r"G:\My Drive")

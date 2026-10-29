@@ -1200,7 +1200,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add_command("update-cloud", help="copy what hasn't reached the secondary drive to the cloud, "
                                             f"standing in for it ({config.CLOUD_PICTURES}): the albums waiting on "
-                                            "the primary drive, and albums pending a backup, from the PC")
+                                            "the primary drive, and albums pending a backup, from the PC",
+                    description="Copy what hasn't reached the secondary drive to the cloud, standing in for it "
+                                f"({config.CLOUD_PICTURES}): the albums waiting on the primary drive, and albums "
+                                "pending a backup, from the PC. Rejected photos (in Rejected, not in new or new-old) "
+                                f"go to {config.CLOUD_REJECTED} next to it, and photos culled since are moved there "
+                                "(taken back: moved back). Kept photos are always copied, leaving "
+                                f"{config.CLOUD_RESERVE / 1e9:.0f} GB free; when space is short, rejected photos are "
+                                "deleted from the cloud first, as many as needed. Rejected ones are copied into the "
+                                "room left.")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(func=cmd_update_cloud)
 
