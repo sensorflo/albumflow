@@ -126,10 +126,13 @@ def test_card_refuses_drives_that_are_not_cards(card_drives, value, message):
         cli.card_names(parse(["import-only", f"--card={value}", "trip/day1"]))
 
 
-def test_the_help_explains_drive(capsys):
+def test_the_help_explains_drive_after_the_options(capsys):
     with pytest.raises(SystemExit):
         cli.main(["import", "-h"])
-    out = " ".join(capsys.readouterr().out.split())
-    assert "DRIVE: a drive letter (e or e:), a drive's name (its volume label, e.g. FloBig), or a role: sdcards " \
-           "(cards), drive (the primary drive; also backup-drive, primary)." in out
+    out = capsys.readouterr().out
+    assert " ".join(out.split()).endswith("--dry-run only show what would happen DRIVE a drive letter (e or e:), a "
+                                          "drive's name (its volume label, e.g. FloBig), or a role: sdcards (cards), "
+                                          "drive (the primary drive; also backup-drive, primary)")
     assert "--drive" not in out
+    args = parse(["import", "DRIVE"])  # only in the help: DRIVE is no argument
+    assert args.album_query == "DRIVE"

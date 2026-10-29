@@ -1138,18 +1138,23 @@ EJECT_ROLES = {"card": "cards", "primary": "the primary drive", "secondary": "th
 
 
 def no_eject_arg(p: argparse.ArgumentParser, roles: list[str]) -> None:
-    """--no-eject for a command that ejects drives in these roles (card, primary, secondary) when done, and the
-    help's DRIVE section."""
+    """--no-eject for a command that ejects drives in these roles (card, primary, secondary) when done."""
     p.add_argument("--no-eject", nargs="?", const="", metavar="DRIVE,...",
                    help=f"don't eject {' and '.join(EJECT_ROLES[role] for role in roles)} when done; "
                         "--no-eject=DRIVE,... keeps just those")
     p.set_defaults(eject_roles=roles)
+
+
+def drive_doc(p: argparse.ArgumentParser, roles: list[str]) -> None:
+    """Explain DRIVE after the options, laid out like them (as git's help explains e.g. <branchname>): an entry in
+    the help's options section only, not an argument (it isn't in the parser's actions, which parsing uses)."""
     by_role = []
     for role in roles:
         name, *also = EJECT_ROLE_NAMES[role]
         by_role.append(f"{name} ({EJECT_ROLES[role]}{'; also ' + ', '.join(also) if also else ''})")
-    p.epilog = (f"DRIVE: a drive letter (e or e:), a drive's name (its volume label, e.g. FloBig), or a role: "
-                f"{', '.join(by_role)}.")
+    p._optionals._group_actions.append(argparse.Action(
+        [], "DRIVE", metavar="DRIVE", help=f"a drive letter (e or e:), a drive's name (its volume label, e.g. "
+                                           f"FloBig), or a role: {', '.join(by_role)}"))
 
 
 def bare_no_eject(argv: list[str], parser: argparse.ArgumentParser) -> list[str]:
@@ -1231,6 +1236,8 @@ def build_parser() -> argparse.ArgumentParser:
         if roles:
             no_eject_arg(p, roles)
         p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+        if roles:
+            drive_doc(p, roles)
 
     p = add_command("import", aliases=["i"], help="import-only, then backup-new")
     album_args(p, card=True, drive=True)
@@ -1262,6 +1269,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "backup_all_includes_update_cloud, in %APPDATA%\\backup\\config.json.")
     no_eject_arg(p, ["primary", "secondary"])
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
+    drive_doc(p, ["primary", "secondary"])
     p.set_defaults(func=cmd_update_secondary)
 
     p = add_command("update-cloud", help="copy what hasn't reached the secondary drive to the cloud, "
