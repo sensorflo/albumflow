@@ -180,7 +180,9 @@ Files: `.ARW`, plus `.JPG` if the camera wrote any. Everything below `DCIM`.
 
   The topic folder must exist; the album folder too, unless `--create-album`.
   Without `--card`, it imports every inserted card (a drive with a `DCIM`
-  folder; an empty one simply has nothing to do), one after the other. If no
+  folder; an empty one simply has nothing to do), one after the other;
+  `--card DRIVE,...` only those named (2026-10-29: a list, any DRIVE that is a
+  card; `--drive` is gone, the primary drive is always found by its marker). If no
   card is inserted at the start, it waits for one (polling every 2 s). The next
   card is only looked for once the current one is done, so it can be inserted
   while the current one is being imported. Finished cards are recognized by

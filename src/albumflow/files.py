@@ -134,7 +134,7 @@ def is_role_name(name: str) -> bool:
 
 
 def is_drive_letter(name: str) -> bool:
-    return re.fullmatch(r"[a-z]:?", name, re.IGNORECASE) is not None
+    return re.fullmatch(r"[a-z](:\\?)?", name, re.IGNORECASE) is not None  # e, e: or e:\
 
 
 def names_drive(name: str, drive: Path, role: str) -> bool:

@@ -65,7 +65,7 @@ def test_drives_without_an_equals_sign_are_refused(following, capsys):
 
 
 def test_a_role_the_command_doesnt_eject_is_an_error(labels):
-    with pytest.raises(AlbumflowError, match="--no-eject=sdcards: this command doesn't eject that"):
+    with pytest.raises(AlbumflowError, match="--no-eject=sdcards: not for this option"):
         cli.no_eject(parse(["backup-new", "--no-eject=sdcards", "trip/day1"]))
     assert cli.no_eject(parse(["update-secondary", "--no-eject=secondary"])).names == ["secondary"]
 
@@ -93,3 +93,43 @@ def test_import_ejects_what_isnt_kept(labels, tmp_path, monkeypatch, options, ex
     assert cli.cmd_import(args) == 0
     eject = calls[0]["eject"]
     assert [role for drive, role in ((CARD, "card"), (PRIMARY, "primary")) if eject(drive, role)] == expected
+
+
+@pytest.fixture
+def card_drives(tmp_path, monkeypatch):
+    """Two drives, by their names: SONY, a card, and FloBig, not one."""
+    sony, big = tmp_path / "SONY", tmp_path / "FloBig"
+    (sony / "DCIM").mkdir(parents=True)
+    big.mkdir()
+    monkeypatch.setattr(files, "volume_label", lambda drive: drive.name)
+    monkeypatch.setattr(cli, "volume_label", lambda drive: drive.name)
+    monkeypatch.setattr(cli, "drives", lambda: [sony, big])
+
+
+@pytest.mark.parametrize("argv, names", [
+    ([], None),
+    (["--card", "SONY"], ["SONY"]),
+    (["--card=sony,e:"], ["sony", "e:"]),
+    (["--card=sdcards"], None),
+])
+def test_card_takes_the_drives_to_import(card_drives, argv, names):
+    args = parse(["import-only", *argv, "trip/day1"])
+    assert (cli.card_names(args), args.album_query) == (names, "trip/day1")
+
+
+@pytest.mark.parametrize("value, message", [
+    ("FloBig", "is not a camera card"),
+    ("drive", "--card=drive: not for this option"),
+])
+def test_card_refuses_drives_that_are_not_cards(card_drives, value, message):
+    with pytest.raises(AlbumflowError, match=message):
+        cli.card_names(parse(["import-only", f"--card={value}", "trip/day1"]))
+
+
+def test_the_help_explains_drive(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["import", "-h"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "DRIVE: a drive letter (e or e:), a drive's name (its volume label, e.g. FloBig), or a role: sdcards " \
+           "(cards), drive (the primary drive; also backup-drive, primary)." in out
+    assert "--drive" not in out

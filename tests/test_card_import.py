@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from albumflow import backup, card_import, config
+from albumflow import backup, card_import, config, files
 from albumflow.files import AlbumflowError
 
 
@@ -362,3 +362,14 @@ def test_card_done_hook_runs_before_eject(setup, monkeypatch):
     card_import.import_only("party", "fest", card=card, create_album=True, eject=lambda *_: True, log=lambda *_: None,
                             on_card_done=lambda c: events.append("done"))
     assert events == ["done", "eject"]
+
+
+def test_imports_only_the_cards_named(setup, monkeypatch):
+    card1, tmp = setup
+    card2 = tmp / "card2"
+    make_photo(card2 / "DCIM" / "100MSDCF" / "_DSC0003.JPG", "2026:08:29 10:00:00")
+    monkeypatch.setattr(card_import, "card_candidates", lambda: [card1, card2])
+    monkeypatch.setattr(files, "volume_label", lambda drive: {"card": "SONY", "card2": "OTHER"}[drive.name])
+    items = card_import.import_only("party", "fest", card_names=["sony"], create_album=True, log=lambda *_: None)
+    assert len(items) == 2
+    assert card_import.has_photos(card2)

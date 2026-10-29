@@ -19,7 +19,7 @@ from albumflow import (album_choice, annex, backup, card_import, clock, completi
                        mediainfo, movies, purge, index, selfcopy)
 from albumflow.exiftool import ExifTool
 from albumflow.files import (EJECT_ROLE_NAMES, AlbumflowError, NoEject, drives, is_drive_letter, is_role_name,
-                             volume_label)
+                             names_drive, volume_label)
 
 
 def _api(interactive: bool = False):
@@ -341,7 +341,7 @@ class _BackupBar:
 
 def cmd_import(args, ask=None) -> int:
     remind_pending()
-    if not args.dry_run and backup.find_backup_drive(_path(args.drive)) is None:
+    if not args.dry_run and backup.find_backup_drive() is None:
         answer = (ask or ask_key)("The primary drive is not connected: [w]ait for it, or [c]ontinue without "
                                   "the backup? [w/c/q] ", "wcq")
         if answer == "q":
@@ -353,7 +353,7 @@ def cmd_import(args, ask=None) -> int:
             return 0
     display = ProgressDisplay()
     bar = _BackupBar(display)
-    card_import.import_and_backup(args.topic, args.album, card=_path(args.card), drive=_path(args.drive),
+    card_import.import_and_backup(args.topic, args.album, card_names=card_names(args, display.log),
                                   create_album=args.create_album, eject=no_eject(args, display.log).ejects,
                                   dry_run=args.dry_run, log=display.log, card_progress=_card_bar(display),
                                   backup_progress=bar.progress, on_backup_drive=bar.set_drive,
@@ -363,7 +363,8 @@ def cmd_import(args, ask=None) -> int:
 
 def cmd_import_only(args) -> int:
     display = ProgressDisplay()
-    card_import.import_only(args.topic, args.album, card=_path(args.card), create_album=args.create_album,
+    card_import.import_only(args.topic, args.album, card_names=card_names(args, display.log),
+                            create_album=args.create_album,
                             eject=no_eject(args, display.log).ejects, dry_run=args.dry_run, log=display.log,
                             card_progress=_card_bar(display), on_card_done=_pruning(args, display))
     return 0
@@ -378,10 +379,6 @@ def remind_pending(log=print) -> None:
 
 def _pruning(args, display: ProgressDisplay):
     return lambda card: offer_pruning(card, args.album, log=display.log, ask=display.ask, force=args.force_prune)
-
-
-def _path(value: str | None) -> Path | None:
-    return Path(value) if value else None
 
 
 def _age(mtime: float) -> str:
@@ -573,7 +570,7 @@ def cmd_sync_clocks(args) -> int:
         log("No clock readings for this album yet.")
         return 0
 
-    drive = backup.find_backup_drive(_path(args.drive))
+    drive = backup.find_backup_drive()
     if drive is None:
         log("The primary drive is not connected: photos are only corrected once their originals are on it.")
     dirs = backup.album_backup_dirs(drive, args.topic, args.album) if drive else []
@@ -966,9 +963,7 @@ def cmd_movie_status(args, ask=input) -> int:
 def cmd_backup_new(args) -> int:
     selfcopy.write_to_connected()  # albumflow for the office laptop
     display = ProgressDisplay()
-    drive = _path(args.drive)
-    if not args.dry_run:
-        drive = backup.wait_for_backup_drive(drive, display.log)
+    drive = None if args.dry_run else backup.wait_for_backup_drive(log=display.log)
     progress = _BackupBar(display, drive).progress
     keep = no_eject(args, display.log)
     if not args.all:
@@ -1143,13 +1138,18 @@ EJECT_ROLES = {"card": "cards", "primary": "the primary drive", "secondary": "th
 
 
 def no_eject_arg(p: argparse.ArgumentParser, roles: list[str]) -> None:
-    """--no-eject for a command that ejects drives in these roles (card, primary, secondary) when done."""
-    what = " and ".join(EJECT_ROLES[role] for role in roles)
-    names = ", ".join(f"{EJECT_ROLE_NAMES[role][0]} ({EJECT_ROLES[role]})" for role in roles)
+    """--no-eject for a command that ejects drives in these roles (card, primary, secondary) when done, and the
+    help's DRIVE section."""
     p.add_argument("--no-eject", nargs="?", const="", metavar="DRIVE,...",
-                   help=f"don't eject {what} when done; --no-eject=<drive>,... keeps just those: a drive letter (e or "
-                        f"e:), {names}, or a drive's name")
+                   help=f"don't eject {' and '.join(EJECT_ROLES[role] for role in roles)} when done; "
+                        "--no-eject=DRIVE,... keeps just those")
     p.set_defaults(eject_roles=roles)
+    by_role = []
+    for role in roles:
+        name, *also = EJECT_ROLE_NAMES[role]
+        by_role.append(f"{name} ({EJECT_ROLES[role]}{'; also ' + ', '.join(also) if also else ''})")
+    p.epilog = (f"DRIVE: a drive letter (e or e:), a drive's name (its volume label, e.g. FloBig), or a role: "
+                f"{', '.join(by_role)}.")
 
 
 def bare_no_eject(argv: list[str], parser: argparse.ArgumentParser) -> list[str]:
@@ -1166,23 +1166,41 @@ def bare_no_eject(argv: list[str], parser: argparse.ArgumentParser) -> list[str]
     return found
 
 
+def drive_names(option: str, value: str, roles: list[str], log=print) -> list[str]:
+    """The DRIVE names in an option's value, comma-separated. A role's name not among roles is an error, a name no
+    connected drive has only a warning (a card may come later)."""
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    labels = {volume_label(drive).casefold() for drive in drives()}
+    for name in names:
+        if is_role_name(name):
+            if not any(name.casefold() in EJECT_ROLE_NAMES[role] for role in roles):
+                raise AlbumflowError(f"{option}={name}: not for this option")
+        elif not is_drive_letter(name) and name.casefold() not in labels:
+            log(f"Warning: {option}={name}: no drive with that name is connected (yet)")
+    return names
+
+
 def no_eject(args, log=print) -> NoEject:
-    """args.no_eject: not given, eject all; given without drives, keep all; else keep those named. A role's name
-    the command doesn't eject anyway is an error, a name no connected drive has only a warning (a card may come
-    later)."""
+    """args.no_eject: not given, eject all; given without drives, keep all; else keep those named."""
     if args.no_eject is None:
         return NoEject()
     if not args.no_eject:
         return NoEject(keep_all=True)
-    names = [name.strip() for name in args.no_eject.split(",") if name.strip()]
-    labels = {volume_label(drive).casefold() for drive in drives()}
-    for name in names:
-        if is_role_name(name):
-            if not any(name.casefold() in EJECT_ROLE_NAMES[role] for role in args.eject_roles):
-                raise AlbumflowError(f"--no-eject={name}: this command doesn't eject that")
-        elif not is_drive_letter(name) and name.casefold() not in labels:
-            log(f"Warning: --no-eject={name}: no drive with that name is connected (yet)")
-    return NoEject(names)
+    return NoEject(drive_names("--no-eject", args.no_eject, args.eject_roles, log))
+
+
+def card_names(args, log=print) -> list[str] | None:
+    """args.card: the DRIVE names of the cards to import; None for all. A named drive that is connected must be a
+    card (have a DCIM folder)."""
+    if args.card is None:
+        return None
+    names = drive_names("--card", args.card, ["card"], log)
+    if any(is_role_name(name) for name in names):  # sdcards: all of them
+        return None
+    for drive in drives():
+        if any(names_drive(name, drive, "card") for name in names) and not (drive / "DCIM").is_dir():
+            raise AlbumflowError(f"--card={args.card}: {drive} is not a camera card (no DCIM folder)")
+    return names
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1201,14 +1219,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="e.g. party/secret-castle-2026; may be abbreviated or misspelled, "
                             "you get a choice if it isn't exact (none: most recent albums)")
         if card:
-            p.add_argument("--card", help="card drive, e.g. E:\\ (default: every inserted card, one after the other; waits for one)")
+            p.add_argument("--card", metavar="DRIVE,...",
+                           help="the cards to import (default: every inserted card, one after the other; waits "
+                                "for one)")
             p.add_argument("-c", "--create-album", action="store_true",
                            help="create the album folder if it doesn't exist yet")
             p.add_argument("--force-prune", action="store_true",
                            help="when a full card offers to delete old backups on it, also delete those not "
                                 "yet in a secondary backup")
-        if drive:
-            p.add_argument("--drive", help=f"primary drive (default: the one with a {config.BACKUP_MARKER} file)")
         roles = [role for role, used in (("card", card), ("primary", drive)) if used]
         if roles:
             no_eject_arg(p, roles)
@@ -1292,7 +1310,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--reading", action="append", metavar="PHOTO=TIME",
                    help="a clock photo (part of its name is enough) and the time the clock in it shows, "
                         "e.g. _DSC7115=09:28:54; repeat for each camera. Without any: asked for")
-    p.add_argument("--drive", help=f"primary drive (default: the one with a {config.BACKUP_MARKER} file)")
     p.add_argument("--readings-from", metavar="topic/album",
                    help="take over the clock readings of another album, e.g. of the same festival (loose "
                         "topic/album like the album itself); this album's own readings are kept")

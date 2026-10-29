@@ -21,7 +21,8 @@ from typing import Callable
 
 from albumflow import backup, clock, config
 from albumflow.exiftool import ExifTool
-from albumflow.files import AlbumflowError, ByteCounter, Progress, drives, eject, same_content, volume_serial
+from albumflow.files import (AlbumflowError, ByteCounter, Progress, drives, eject, names_drive, same_content,
+                             volume_serial)
 
 POLL_SECONDS = 2.0  # how often to look for inserted cards
 
@@ -75,13 +76,15 @@ def check_album_dir(topic: str, album: str, create_album: bool) -> Path:
     return album_dir
 
 
-def import_only(topic: str, album: str, card: Path | None = None, create_album: bool = False,
+def import_only(topic: str, album: str, card: Path | None = None, card_names: list[str] | None = None,
+                create_album: bool = False,
                 eject: Callable[[Path, str], bool] | None = None, dry_run: bool = False, log=print,
                 card_progress: Callable[[Path], Progress | None] | None = None,
                 on_card: Callable[[int], None] | None = None,
                 on_photo: Callable[[int], None] | None = None,
                 on_card_done: Callable[[Path], None] | None = None) -> list[ImportItem]:
-    """Import one card, or (card=None) every inserted card, one after the other.
+    """Import one card, or (card=None) every inserted card, one after the other; with card_names, only
+    those named (DRIVE names, see files.names_drive).
 
     Waits (polling) until a card is inserted. The next card is only looked for
     once the current one is done, so it can be inserted while the current one
@@ -103,9 +106,9 @@ def import_only(topic: str, album: str, card: Path | None = None, create_album: 
                            progress=progress, on_card=on_card, on_photo=on_photo)
 
     def inserted() -> list[Path]:
-        if card is None:
-            return find_cards()
-        return [card] if (card / "DCIM").is_dir() else []
+        if card is not None:
+            return [card] if (card / "DCIM").is_dir() else []
+        return [c for c in find_cards() if not card_names or any(names_drive(n, c, "card") for n in card_names)]
 
     items, done, waiting = [], set(), False
     while True:
@@ -255,7 +258,8 @@ def warn_remaining(card: Path, imported: set[Path], dry_run: bool, log=print) ->
             log(f"  {path.relative_to(card)}")
 
 
-def import_and_backup(topic: str, album: str, card: Path | None = None, drive: Path | None = None,
+def import_and_backup(topic: str, album: str, card: Path | None = None, card_names: list[str] | None = None,
+                      drive: Path | None = None,
                       create_album: bool = False, eject: Callable[[Path, str], bool] | None = None,
                       dry_run: bool = False,
                       log=print, card_progress: Callable[[Path], Progress | None] | None = None,
@@ -270,7 +274,8 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
     says whether to eject each card and, at the end, the primary drive.
     """
     if dry_run:
-        items = import_only(topic, album, card=card, create_album=create_album, dry_run=True, log=log)
+        items = import_only(topic, album, card=card, card_names=card_names, create_album=create_album,
+                            dry_run=True, log=log)
         if config.album_dir(topic, album).is_dir():
             backup.backup_new(topic, album, drive=drive, dry_run=True, log=log)
         log("All photos would be backed up in parallel to the import")
@@ -280,7 +285,7 @@ def import_and_backup(topic: str, album: str, card: Path | None = None, drive: P
                                      on_drive=on_backup_drive)
     parallel.start()
     try:
-        items = import_only(topic, album, card=card, create_album=create_album, eject=eject,
+        items = import_only(topic, album, card=card, card_names=card_names, create_album=create_album, eject=eject,
                             log=log, card_progress=card_progress, on_card=parallel.expect,
                             on_photo=parallel.arrived, on_card_done=on_card_done)
     except BaseException:
