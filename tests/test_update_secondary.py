@@ -430,3 +430,19 @@ def test_update_secondary_without_the_secondary_drive_nor_the_cloud(drives, monk
     lines = []
     backup.update_secondary(log=lines.append)
     assert lines[0].startswith("Nothing to update: neither is the secondary drive")
+
+
+def test_photos_in_subfolders_are_part_of_the_album(drives, cloud, new):
+    primary, _ = drives
+    album = pending_album(new, r"trip\day1", {"1.ARW": b"one"})
+    (album / "Lightroom").mkdir()
+    (album / "Lightroom" / "2.ARW").write_bytes(b"two")  # being processed in Lightroom
+    (album / "Lightroom" / "1.ARW").write_bytes(b"one")  # copied there too
+    (album / ".dtrash").mkdir()
+    (album / ".dtrash" / "3.ARW").write_bytes(b"deleted")
+    assert backup.kept_names(Path(r"trip\day1")) == {"1.ARW", "2.ARW"}
+    backup.update_cloud(log=lambda *_: None)  # pending a backup, from the PC
+    assert tree(cloud) == {r"trip\day1\1.ARW": b"one", r"trip\day1\2.ARW": b"two"}
+    backup.backup_new("trip", "day1", drive=primary, log=lambda *_: None)
+    assert tree(primary / config.BACKUP_DIR) == {r"trip\day1\1.ARW": b"one", r"trip\day1\2.ARW": b"two"}
+    assert backup.pending_albums() == []

@@ -129,8 +129,18 @@ class Shot:
 
 
 def photo_files(album_dir: Path) -> list[Path]:
+    """The photos directly in the album folder: those clock corrections rename. Not those in its subfolders,
+    e.g. Lightroom, whose catalog knows them by name."""
     return sorted(p for p in album_dir.iterdir()
                   if p.is_file() and p.suffix.lower() in config.CAMERA_SUFFIXES)
+
+
+def album_photos(album_dir: Path) -> list[Path]:
+    """All the album's photos: also those in its subfolders (e.g. Lightroom, the photos being processed there),
+    but not in hidden ones (e.g. darktable's .dtrash)."""
+    return sorted(p for p in album_dir.rglob("*")
+                  if p.is_file() and p.suffix.lower() in config.CAMERA_SUFFIXES
+                  and not any(part.startswith(".") for part in p.relative_to(album_dir).parts))
 
 
 def load_shots(album_dir: Path, state: AlbumState, exif: ExifTool | None = None, log=print,
@@ -312,6 +322,9 @@ def apply(album_dir: Path, backup_dirs: list[Path], log=print, confirm=None, dry
             log(f'  Add one with: albumflow sync-clocks -r <clock photo>=<time on the clock> '
                 f'"{album_dir.parent.name}/{album_dir.name}"')
             return 0
+        if skipped := len(album_photos(album_dir)) - len(photo_files(album_dir)):
+            log(f"Clock correction leaves the {skipped} photos in subfolders (e.g. Lightroom) as they are: "
+                "their programs know them by name.")
         todo = plan(shots)
         if not todo:
             log("Clock correction: all photos are in order.")

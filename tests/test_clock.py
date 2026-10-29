@@ -142,6 +142,20 @@ def test_measure_and_apply(album):
     assert backup.missing_on_backup(album, ssd) == []
 
 
+def test_apply_leaves_photos_in_subfolders_alone(album):
+    album, ssd = album
+    (album / "Lightroom").mkdir()
+    (album / "20260828T120200-_DSC0102.JPG").replace(album / "Lightroom" / "20260828T120200-_DSC0102.JPG")
+    with ExifTool() as exif:
+        clock.measure(album, album / "20260828T120000-_DSC0001.JPG", datetime.time(12, 0, 0), exif)
+        clock.measure(album, album / "20260828T120305-_DSC0101.JPG", datetime.time(12, 1, 0), exif)
+    lines = []
+    assert clock.apply(album, [ssd], log=lines.append) == 0
+    assert (album / "Lightroom" / "20260828T120200-_DSC0102.JPG").exists()
+    assert "Clock correction leaves the 1 photos in subfolders (e.g. Lightroom) as they are: their programs " \
+           "know them by name." in lines
+
+
 def test_waits_until_original_is_on_backup(album):
     album, ssd = album
     (ssd / "20260828T120200-_DSC0102.JPG").unlink()

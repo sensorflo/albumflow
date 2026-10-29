@@ -120,13 +120,15 @@ def missing_on_backup(source_dir: Path, dest_dir: Path, also: list[Path] = (),
                       on_secondary: dict[str, int] | None = None) -> list[tuple[Path, Path]]:
     """(source, destination in dest_dir) of every original in source_dir not yet on the backup, i.e. in
     neither dest_dir nor the folders in also, nor on the secondary drive (on_secondary: name -> size, see
-    on_secondary_drive; e.g. after the album was purged from the primary drive's copied-to-secondary)."""
+    on_secondary_drive; e.g. after the album was purged from the primary drive's copied-to-secondary). Also
+    those in source_dir's subfolders (e.g. Lightroom): on the backup, they are in dest_dir itself."""
     dirs = [dest_dir, *also]
     on_secondary = on_secondary or {}
-    todo = []
-    for src in sorted(source_dir.iterdir()):
-        if not (src.is_file() and src.suffix.lower() in config.CAMERA_SUFFIXES):
-            continue  # also skips ".part" files of copies in progress
+    todo, names = [], set()
+    for src in clock.album_photos(source_dir):  # without ".part" files of copies in progress
+        if src.name in names:
+            continue  # the same photo in a subfolder too, e.g. copied to Lightroom
+        names.add(src.name)
         corrected, import_name = split_name(src.name)
         if corrected:
             # Clock-corrected on the PC; the backup keeps the original under its import name.
@@ -546,7 +548,7 @@ def kept_names(album: Path) -> set[str] | None:
     for root in (config.PICTURES_NEW, config.PICTURES_NEW_OLD):
         for folder in (root / album, annex.link_of(root / album)):
             if folder.is_dir():
-                return {split_name(p.name)[1] for p in clock.photo_files(folder)}
+                return {split_name(p.name)[1] for p in clock.album_photos(folder)}
     return None
 
 
@@ -623,11 +625,13 @@ def cloud_todo(drive: Path | None) -> list[WaitingAlbum]:
     for topic, album in pending_albums():
         on_drive = drive / config.BACKUP_DIR / topic / album if drive else None
         todo = []
-        for src in clock.photo_files(config.album_dir(topic, album)):
+        for src in clock.album_photos(config.album_dir(topic, album)):
             corrected, _ = split_name(src.name)
             if corrected or (on_drive and (on_drive / src.name).is_file()):
                 continue  # clock-corrected only once its original is on the primary drive; or copied from there
-            target = cloud / topic / album / src.name
+            target = cloud / topic / album / src.name  # also for a photo in a subfolder, e.g. Lightroom
+            if any(target == dest for _, dest in todo):
+                continue  # the same photo in a subfolder too
             if not target.exists():
                 todo.append((src, target))
             elif target.stat().st_size != src.stat().st_size:

@@ -612,6 +612,12 @@ under the album's topic), `sync-clocks`. The annex treats it like any folder.
   same tree as everywhere else, `Backup\<topic>\<album>`, not just
   `Backup\<album>` as the import writes it now. Affects the import, card
   pruning (`old_backups`, matching by name), and the existing card folders.
+- Photos being processed in Lightroom (2026-10-29): `<album>\Lightroom`, a
+  subfolder, so an album stays one folder (formerly the sibling
+  `<album> (lightroom)`). Its photos are part of the album: backed up (flat,
+  into the album's folder on the primary drive and in the cloud) and kept for
+  update-cloud. sync-clocks renames only the photos directly in the album
+  folder: Lightroom's catalog knows them by name.
 - Rejected photos (done, 2026-10-25): `Rejected\<topic>\<album>`, mirrored
   in the annex. While culling they're moved to the C: folder, for speed;
   `to-annex` on a folder below `Rejected` moves only its files into the
