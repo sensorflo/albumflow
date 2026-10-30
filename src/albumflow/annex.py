@@ -98,6 +98,12 @@ def has_files(folder: Path) -> bool:
     return any(p.is_file() for p in folder.iterdir())
 
 
+def has_own_files(folder: Path) -> bool:
+    """Whether folder directly holds files other than config.ANNEX_PATH_FILES (e.g. a git worktree's .git)."""
+    ignored = {name.casefold() for name in config.ANNEX_PATH_FILES}
+    return any(p.is_file() and p.name.casefold() not in ignored for p in folder.iterdir())
+
+
 def link_target(link: Path) -> Path:
     target = os.readlink(link)
     return Path(target[4:] if target.startswith("\\\\?\\") else target)
@@ -424,7 +430,7 @@ def status(annex: Path | None = None) -> list[Entry]:
                 else:
                     entries.append(Entry("ok" if ok else "broken link", home_child, child))
             elif home_child.is_dir() and not is_link(home_child):
-                if has_files(child):
+                if has_own_files(child):
                     entries.append(Entry("in both places", home_child, child))
                 else:
                     walk(child, home_child)  # a parent folder that exists in both places

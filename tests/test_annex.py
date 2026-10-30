@@ -226,3 +226,16 @@ def test_folder_with_only_subfolders(setup):
     kinds = {(e.kind, e.home_path.name) for e in annex.status()}
     assert ("missing link", "Goa") in kinds
     assert ("no folder on C:", "toplevel") in kinds
+
+
+def test_a_git_worktree_on_both_sides_is_looked_through(setup):
+    home, drive, album = setup
+    annex.to_annex(album, log=lambda *_: None)
+    pictures = home / "Large" / "Pictures"
+    (pictures / ".gitignore").write_text("x")
+    (pictures / "notes.txt").write_text("x")
+    (drive / "Large" / "Pictures" / ".git").write_text("gitdir: C:/somewhere")
+    (drive / "Large" / "Pictures" / ".gitignore").write_text("x")
+    (drive / "Large" / "Pictures" / "Desktop.ini").write_text("x")
+    kinds = {(e.kind, e.home_path.name) for e in annex.status()}
+    assert kinds == {("ok", "fest")}
