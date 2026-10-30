@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -209,7 +210,7 @@ def make_missing_links(drive, names):
 def test_fix_asks_per_link(setup, monkeypatch, capsys, answers, linked):
     home, drive, album = setup
     make_missing_links(drive, ["a1", "a2", "a3"])
-    replies = iter(answers)
+    replies = iter(["n", *answers])  # first: not the missing topic folders
     monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
     cli.main(["annex-status", "--fix"])
     party = config.PICTURES_NEW / "party"
@@ -239,3 +240,32 @@ def test_a_git_worktree_on_both_sides_is_looked_through(setup):
     (drive / "Large" / "Pictures" / "Desktop.ini").write_text("x")
     kinds = {(e.kind, e.home_path.name) for e in annex.status()}
     assert kinds == {("ok", "fest")}
+
+
+def test_topic_folders_are_the_same_in_every_tree_on_both_sides(setup, monkeypatch, capsys):
+    home, drive, album = setup  # new\party on C:
+    rejected = home / "Large" / "Pictures" / "Rejected"
+    (rejected / "Hollidays").mkdir(parents=True)
+    (rejected / config.ONLY_FOR_OTHERS).mkdir()  # not a topic
+    (drive / "Large" / "Pictures" / "Pictures" / "new" / "hollidays").mkdir(parents=True)  # spelled differently
+    missing, spelled = annex.topic_folders(drive)
+    trees = [Path(tree) for tree in config.TOPIC_TREES]
+    expected = {root / tree / topic for root in (home, drive) for tree in trees for topic in ("party", "Hollidays")}
+    present = {home / trees[0] / "party", home / trees[4] / "Hollidays", drive / trees[0] / "hollidays"}
+    assert set(missing) == expected - present
+    assert spelled == [["Hollidays", "hollidays"]]
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    assert cli.main(["annex-status", "--fix"]) == 0
+    assert annex.topic_folders(drive) == ([], [["Hollidays", "hollidays"]])
+    assert not (drive / trees[4] / config.ONLY_FOR_OTHERS).exists()
+
+
+def test_a_topic_moved_to_the_annex_as_a_whole_is_there(setup):
+    home, drive, album = setup
+    topic = home / "Large" / "Pictures" / "Rejected" / "unsorted"
+    topic.mkdir(parents=True)
+    (topic / "x.jpg").write_text("x")
+    annex.to_annex(topic, log=lambda *_: None)
+    assert ("ok", "unsorted") in {(e.kind, e.home_path.name) for e in annex.status()}
+    missing, _ = annex.topic_folders(drive)
+    assert topic not in missing and drive / topic.relative_to(home) not in missing

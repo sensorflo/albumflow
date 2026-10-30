@@ -324,7 +324,13 @@ room, not speed, hence the name.
   the primary store).
 - `albumflow annex-status [--fix]`: what's in the annex, and problems (missing
   link, broken link, in both places, interrupted move, no matching folder);
-  `--fix` creates missing links after asking.
+  `--fix` creates missing links after asking. A unit is whatever has an
+  `(annex)` link; folders above units are only the path, also when they hold
+  `.git`, `.gitignore` or `desktop.ini` (S:\Large\Pictures is a git worktree).
+  Topic folders (2026-10-30): each of `new`, `new-old`, `generated`,
+  `Originals`, `Rejected`, on C: and S:, should have every topic any of them
+  has (ignoring case; `OnlyForOthers` isn't a topic); `--fix` creates the
+  missing ones after asking, and a topic folder is never linked as a unit.
 - Implemented in albumflow as a self-contained module (`annex.py`, only generic
   helpers), so it could become its own tool if it grows beyond photos.
 

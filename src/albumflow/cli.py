@@ -769,9 +769,27 @@ def cmd_annex_status(args) -> int:
     for e in (ok if args.verbose else []) + problems:
         print_entry(e)
         print()
+    missing_topics, spelled = annex.topic_folders(drive)
+    if missing_topics:
+        print("topic folders missing (each tree should have every topic, on C: and the annex; --fix creates them)")
+        for folder in missing_topics:
+            print(f"  {folder}")
+        print()
+    if spelled:
+        print("topics spelled differently in different places (rename by hand if you like): "
+              + "; ".join(" / ".join(names) for names in spelled))
+        print()
     counts = {kind: sum(1 for e in problems if e.kind == kind) for kind in dict.fromkeys(e.kind for e in problems)}
+    if missing_topics:
+        counts["missing topic folder"] = len(missing_topics)
     summary = f"Annex {drive_description(drive)}: {len(ok)} folders linked correctly"
-    if not problems:
+    if args.fix and missing_topics and ask_key(f"Create the {len(missing_topics)} missing topic folders? [y/n] ",
+                                               "yn") == "y":
+        for folder in missing_topics:
+            folder.mkdir(parents=True, exist_ok=True)
+        print(f"  created {len(missing_topics)} topic folders")
+        del counts["missing topic folder"]
+    if not counts:
         print(f"{summary}, no problems.")
         return 0
     fixable = [e for e in problems if e.kind == "missing link"]
@@ -784,11 +802,12 @@ def cmd_annex_status(args) -> int:
         "no folder on C:": ("its parent folder doesn't exist in the home folder, or it is directly in the "
                             "home folder and contains only subfolders; never linked automatically "
                             "(layout not mirrored?)"),
+        "missing topic folder": "listed above",
     }
     for kind in counts:
         print(f"  {kind}: {hints[kind]}")
     print()
-    print(f"{summary}; {len(problems)} problem(s): " + ", ".join(f"{n} {kind}" for kind, n in counts.items()) + ".")
+    print(f"{summary}; {sum(counts.values())} problem(s): " + ", ".join(f"{n} {kind}" for kind, n in counts.items()) + ".")
     if args.fix and fixable:
         print()
         print(f"{len(fixable)} missing link(s). For each: y = create, n = skip, "

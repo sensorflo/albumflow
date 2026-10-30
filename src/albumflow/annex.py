@@ -419,6 +419,8 @@ def status(annex: Path | None = None) -> list[Entry]:
                 continue
             name = child.name[: -len(PART)] if child.name.endswith(PART) else child.name
             home_child, link = home_dir / name, link_of(home_dir / name)
+            if is_topic_folder(home_child) and not home_child.is_dir() and not is_link(link):
+                continue  # not to be linked: topic_folders reports it missing on C:
             if child.name.endswith(PART) or has_note(child):
                 entries.append(Entry("interrupted", home_child, child))
             elif is_link(link):
@@ -455,6 +457,35 @@ def status(annex: Path | None = None) -> list[Entry]:
                         if name.endswith(config.ANNEX_SUFFIX) and path not in seen_links:
                             entries.append(Entry("broken link", folder_of(path), None))
     return sorted(entries, key=lambda e: str(e.home_path).lower())
+
+
+def is_topic_folder(folder: Path) -> bool:
+    """Whether folder (in the home folder) is <tree>\\<topic>, for a tree of config.TOPIC_TREES."""
+    try:
+        parent = str(relative(folder).parent).casefold()
+    except AlbumflowError:
+        return False
+    return any(parent == tree.casefold() for tree in config.TOPIC_TREES)
+
+
+def topic_folders(annex: Path) -> tuple[list[Path], list[list[str]]]:
+    """The topic folders config.TOPIC_TREES lack, on C: and on the annex (compared ignoring case; one moved to the
+    annex, with its link on C:, is there), and the topics spelled differently in different places (each: its
+    spellings)."""
+    roots = [home(), annex]
+    spellings: dict[str, list[str]] = {}
+    for root in roots:
+        for tree in config.TOPIC_TREES:
+            folder = root / tree
+            for p in sorted(folder.iterdir()) if folder.is_dir() else []:
+                if (p.is_dir() and not is_link(p) and not p.name.startswith(".")
+                        and p.name.casefold() != config.ONLY_FOR_OTHERS.casefold()):
+                    names = spellings.setdefault(p.name.casefold(), [])
+                    if p.name not in names:
+                        names.append(p.name)
+    missing = [root / tree / names[0] for root in roots for tree in config.TOPIC_TREES for names in spellings.values()
+               if not ((root / tree / names[0]).exists() or is_link(link_of(root / tree / names[0])))]
+    return missing, [names for names in spellings.values() if len(names) > 1]
 
 
 def fix_link(entry: Entry) -> None:

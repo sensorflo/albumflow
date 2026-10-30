@@ -131,6 +131,10 @@ ANNEX_SUFFIX = " (annex)"
 # Files that may be in a folder on both sides, e.g. Large\Pictures, a git worktree on the annex, without making it
 # a folder "in both places": annex-status looks further down instead (compared ignoring case)
 ANNEX_PATH_FILES = [".git", ".gitignore", "desktop.ini"]
+# The trees of <topic> folders (relative to HOME_FOLDER): on C: and on the annex, each should have every topic any
+# of them has (annex-status checks it, --fix creates the missing ones). ONLY_FOR_OTHERS isn't a topic.
+TOPIC_TREES = [R"Large\Pictures\Pictures\new", R"Large\Pictures\Pictures\new-old", R"Large\Pictures\Pictures\generated",
+               R"Large\Pictures\Originals", R"Large\Pictures\Rejected"]
 # Rejected photos, <REJECTED_TREE>\<topic>\<album> (relative to HOME_FOLDER). While culling they are moved
 # (e.g. by FastRawViewer) to the album's folder on C:, for speed; to-annex moves its files to the annex but
 # keeps the folder, as the drop target, until the album is finished.
